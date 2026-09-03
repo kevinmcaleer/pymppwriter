@@ -27,7 +27,7 @@ NATIVE = {"UNIQUE_ID": 86, "ID": 23, "NAME": 14, "START": 35, "FINISH": 36, "DUR
           "REMAINING_DURATION": 31, "OUTLINE_LEVEL": 249, "PARENT_UID": 160, "EARLY_START": 37,
           "EARLY_FINISH": 38, "LATE_START": 39, "LATE_FINISH": 40, "CREATED": 93, "GUID": 1143,
           "MILESTONE": 24, "SUMMARY": 92, "ESTIMATED": 396, "ACTUAL_DURATION_UNITS": 181,
-          "TASK_MODE": 1280}
+          "TASK_MODE": 1280, "WORK": 0, "REMAINING_WORK": 4}
 RSC_NATIVE = {"UNIQUE_ID": 27, "ID": 0, "NAME": 1, "INITIALS": 2, "EMAIL_ADDRESS": 35,
               "MAX_UNITS": 4, "CALENDAR_UID": 56, "GUID": 728, "CALENDAR_GUID": 729,
               "POSITION": 730}
@@ -331,6 +331,18 @@ class MppWriter:
             else:
                 eff[t.uid] = (t.start, t.finish, int(round(t.duration_days * TENTHS_PER_DAY)))
 
+        # assignment work per task (milli-minutes), rolled up into summaries
+        for asn in project.assignments:
+            if asn.task_uid not in by_uid:
+                raise ValueError(f"assignment references unknown task uid {asn.task_uid}")
+        direct_work: Dict[int, float] = {}
+        for asn in project.assignments:
+            dur_tenths = eff[asn.task_uid][2]
+            direct_work[asn.task_uid] = direct_work.get(asn.task_uid, 0.0) + dur_tenths * WORK_SCALE * asn.units
+        wsum: Dict[int, float] = {}
+        for t in sorted(project.tasks, key=depth, reverse=True):
+            wsum[t.uid] = direct_work.get(t.uid, 0.0) + sum(wsum[k.uid] for k in children.get(t.uid, []))
+
         # project summary task (uid 0) spans all tasks
         p_start = min([eff[t.uid][0] for t in project.tasks] or [project.start])
         p_finish = max([eff[t.uid][1] for t in project.tasks] or [project.start])
@@ -342,7 +354,7 @@ class MppWriter:
 
         def emit(proto: dict, uid: int, tid: int, name: str, start, finish, dur_tenths: int,
                  level: int, parent_uid: int, guid: bytes, parent_guid: bytes, is_summary: bool,
-                 position: int, units: str = "d", estimated: bool = False):
+                 position: int, units: str = "d", estimated: bool = False, work: float = 0.0):
             rec = bytearray(proto["rec"]); rec2 = bytearray(proto["rec2"])
             self._put(rec, "UNIQUE_ID", "<I", uid)
             self._put(rec, "ID", "<I", tid)
@@ -350,6 +362,8 @@ class MppWriter:
             self._put(rec, "PARENT_UID", "<I", parent_uid)
             self._put(rec, "DURATION", "<i", dur_tenths)
             self._put(rec, "REMAINING_DURATION", "<i", dur_tenths)
+            self._put(rec, "WORK", "<d", work)
+            self._put(rec, "REMAINING_WORK", "<d", work)
             units_word = (SUMMARY_UNITS if is_summary else UNITS_CODES[units]) | (ESTIMATED_FLAG if estimated else 0)
             self._put(rec, "ACTUAL_DURATION_UNITS", "<H", units_word)
             for f in ("START", "EARLY_START", "LATE_START"):
@@ -374,7 +388,8 @@ class MppWriter:
                 var_entries.append((uid, typ, payload))
 
         emit(self.proto["summary"], 0, 0, project.title, p_start, p_finish,
-             working_tenths(p_start, p_finish), 0, 0, summary_guid, b"\0" * 16, True, 1)
+             working_tenths(p_start, p_finish), 0, 0, summary_guid, b"\0" * 16, True, 1,
+             work=sum(wsum[t.uid] for t in project.tasks if t.parent_uid == 0))
         pos = 2
         # tasks in ID (display) order = list order
         for tid, t in enumerate(project.tasks, start=1):
@@ -382,7 +397,7 @@ class MppWriter:
             start, finish, dur_tenths = eff[t.uid]
             emit(self.proto["task"], t.uid, tid, t.name, start, finish, dur_tenths,
                  t.outline_level, t.parent_uid, t.guid, parent_guid, t.uid in children, pos,
-                 t.duration_units, t.estimated)
+                 t.duration_units, t.estimated, wsum[t.uid])
             pos += 1
 
         # assemble streams: FixedMeta offset field (bytes 4..8) = record offset in FixedData
@@ -536,16 +551,17 @@ class MppWriter:
                 if typ == ASSN_NATIVE["CREATED"]:
                     payload = B.encode_timestamp(datetime.now().replace(second=0, microsecond=0))
                 elif typ == ASSN_NATIVE["PLANNED_WORK_DATA"] and len(payload) >= 36:
-                    # planned-work contour: Project reads the assignment's work from
-                    # here (not the fixed WORK field) and rescheduled tasks to the
-                    # prototype's 1-day shape until it was patched.
-                    # +8 double: 160000.0 at 100% units in every observed file
-                    # (units*16; indistinguishable from a constant at 100%),
-                    # +16 double: total work, +24 uint32: work * 0.08
+                    # planned-work contour: Project schedules the assignment from this
+                    # blob, not from the fixed WORK field (which MPXJ reads).
+                    # +8 double: units * 16 (80000.0 at 50% in a Project-saved file),
+                    # +16 double: total work (milli-minutes),
+                    # +24 uint32: elapsed assignment duration in tenths * 8 —
+                    # writing work*0.08 here made a 50% assignment display half its
+                    # real duration (the two only coincide at 100% units)
                     b2 = bytearray(payload)
                     struct.pack_into("<d", b2, 8, asn.units * PCT_SCALE * 16)
                     struct.pack_into("<d", b2, 16, work)
-                    struct.pack_into("<I", b2, 24, int(round(work * 0.08)))
+                    struct.pack_into("<I", b2, 24, dur_tenths * 8)
                     payload = bytes(b2)
                 avar_entries.append((i, typ, payload))
         a = f"{PRJ}/TBkndAssn"

@@ -186,11 +186,20 @@ def test_writer_resources_and_assignments(tmp_path):
     assert arecs2[0][tg.offset:tg.offset + 16] == p.tasks[0].guid
     assert arecs2[0][rg.offset:rg.offset + 16] == kev.guid
     assert arecs2[1][rg.offset:rg.offset + 16] == bot.guid
-    # planned-work contour blob restates the work (Project reads duration from it)
+    # planned-work contour blob: Project schedules the assignment from this
     _, avt, _ = B.parse_var_meta(r("TBkndAssn/VarMeta"))
     avd = r("TBkndAssn/Var2Data")
     blob = B.read_var(avd, avt[2][ASSN_NATIVE["PLANNED_WORK_DATA"]])
-    work2 = 4800 * 100.0 * 0.5
-    assert struct.unpack_from("<d", blob, 16)[0] == work2
-    assert struct.unpack_from("<I", blob, 24)[0] == int(work2 * 0.08)
-    assert struct.unpack_from("<d", blob, 8)[0] == 0.5 * 10000.0 * 16
+    assert struct.unpack_from("<d", blob, 8)[0] == 0.5 * 10000.0 * 16     # units * 16
+    assert struct.unpack_from("<d", blob, 16)[0] == 4800 * 100.0 * 0.5   # work, milli-min
+    assert struct.unpack_from("<I", blob, 24)[0] == 4800 * 8             # elapsed tenths * 8
+    # assigned tasks carry the work rollup (milli-minutes)
+    work_it = w.task_fm[2]  # ACTUAL_WORK id 2 is at +134; WORK id 0 at +126
+    work_off = w.task_fm[0].offset
+    trecs = B.split_fixed_data(r("TBkndTask/FixedData"),
+                               B.parse_fixed_meta(r("TBkndTask/FixedMeta"), 47)[2])
+    tw = {struct.unpack_from("<I", rec, 0)[0]: struct.unpack_from("<d", rec, work_off)[0]
+          for rec in trecs if len(rec) > 100}
+    assert tw[1] == 9600 * 100.0                  # 2 days at 100%
+    assert tw[2] == 4800 * 100.0 * 0.5            # 1 day at 50%
+    assert tw[0] == tw[1] + tw[2]                 # project summary rollup

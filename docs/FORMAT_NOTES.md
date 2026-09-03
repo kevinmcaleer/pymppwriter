@@ -99,7 +99,9 @@ Project writes 10 var entries per task (baseline/deliverable placeholders); the 
 ## Primitives
 * Timestamp (4 bytes): `uint16 tenthsOfMinute, uint16 daysSince1983-12-31`; `FFFFFFFF` = null.
 * Duration: int32 in tenths of a minute (1 day = 4800). Unit codes: 3 min, 5 h, 7 d, 9 w, 11 mo (+1 = elapsed).
-* Work/cost: double, work in tenths of a minute.
+* Work: double in **thousandths of a minute** (1 day = 480000.0) — task and assignment records alike
+  (verified against a Project-saved file; an earlier note claiming tenths was wrong). Cost: double.
+* Percent-style values (max units, assignment units): double, 10000.0 = 100%.
 * GUID: 16 bytes little-endian (Python `uuid.bytes_le`).
 
 ## Dependencies (TBkndCons)
@@ -122,10 +124,17 @@ Layout from ASSIGNMENT_FIELD_MAP (0x0F40). FixedData record 110 bytes:
 20 Resume, 36 Stop, 46 ASSIGNMENT_UNITS (double, 10000.0 = 100%), 54 WORK (double, minutes × 1000 =
 duration tenths × 100), 70 REGULAR_WORK, 78 REMAINING_WORK`.
 Fixed2Data record 48 bytes: `GUID assignment, GUID task, GUID resource` — the join keys Project uses.
-Meta item sizes 34 / 53. **Project overrides a task's duration with its assignments' data joined by task
-unique id** — which is why the template's phantom unassigned records (one per task) must never be kept.
-Var entries per assignment (cloned from the phantom prototype): keys 16, 32, 49, 146, 147, 267 and
-634 = creation timestamp.
+Meta item sizes 34 / 53. **Project schedules an assigned task from its assignment records** (joined by
+task unique id), *not* from the task's own duration/work fields — which is why the template's phantom
+unassigned records (one per task, all 1 day) must never be cloned unpatched. On save Project recreates
+one phantom (resource uid 0xFFFF0001, units 100%, work = task duration × 100) per unassigned task, and
+an all-zero assignment uid 1 for the project summary; omitting them is tolerated.
+Var entries per assignment: keys 16, 32 (baseline work/cost), 146, 147 (baseline start/finish),
+267, 665, 634 = creation timestamp, and **49 = the planned-work contour Project actually schedules
+from**: `+8 double = units × 16` (160000.0 at 100%), `+16 double = total work (milli-minutes)`,
+`+24 uint32 = elapsed assignment duration in tenths × 8`, `+32 uint32 = contour block count (1)`.
+Getting +24 wrong (e.g. work×0.08, which coincides at 100% units) makes Project display and reschedule
+the task to the wrong duration.
 
 ## Calendars (TBkndCal)
 FixedData: 16-byte deleted stubs, then 12-byte records of three int32 columns: calendar uid, base
