@@ -55,6 +55,11 @@ Don't add resources, baselines or calendar changes. **Save As** `templates/templ
 Why you must make it yourself: the template is a file written by Project, so it must come from
 a copy you're licensed to use, and it embeds your username. It is `.gitignore`d.
 
+Save the template from the **same Project version that will open the generated files** — several
+structures (calendar definitions in particular) are stored in version-specific dialects, and a
+template written by your own copy guarantees the output speaks the dialect your Project reads.
+Both current M365 and 2010-era templates are supported.
+
 ## Usage
 
 ### Command line
