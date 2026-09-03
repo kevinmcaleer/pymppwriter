@@ -1,0 +1,16 @@
+{
+  "title": "NoodlePlanner export example",
+  "start": "2026-09-07T08:00",
+  "tasks": [
+    {"uid": 1, "name": "Phase 1: Discovery",     "start": "2026-09-07T08:00", "finish": "2026-09-09T17:00", "duration_days": 3, "outline_level": 1},
+    {"uid": 2, "name": "Interview stakeholders", "start": "2026-09-07T08:00", "finish": "2026-09-08T17:00", "duration_days": 2, "outline_level": 2, "parent_uid": 1},
+    {"uid": 3, "name": "Write requirements",     "start": "2026-09-09T08:00", "finish": "2026-09-09T17:00", "duration_days": 1, "outline_level": 2, "parent_uid": 1},
+    {"uid": 4, "name": "Build prototype",        "start": "2026-09-10T08:00", "finish": "2026-09-14T17:00", "duration_days": 3, "outline_level": 1},
+    {"uid": 5, "name": "Demo",                   "start": "2026-09-15T08:00", "finish": "2026-09-15T08:00", "duration_days": 0, "outline_level": 1}
+  ],
+  "links": [
+    {"pred": 2, "succ": 3},
+    {"pred": 3, "succ": 4, "type": "FS"},
+    {"pred": 4, "succ": 5, "type": "FS", "lag_days": 0}
+  ]
+}

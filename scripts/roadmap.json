@@ -1,0 +1,65 @@
+{
+  "epics": [
+    {"title": "Epic: Durations honoured by Microsoft Project",
+     "body": "Project shows every written task as \"1 day?\" although duration is written at FixedData+42 (tenths of a minute), units at +46 and remaining duration at +52, and MPXJ reads them correctly. Something else marks the field as valid.\n\nHypotheses: a per-record flag in FixedMeta (47-byte item) or Fixed2Meta (92-byte item); the ACTUAL_DURATION_UNITS / DURATION_UNITS word; or a var-data duplicate.\n\nMethod: open a generated file in Project, type new durations, Save As, diff task records with scripts/analyze_mpp.py.",
+     "features": [
+       "Diff Project-resaved file against generated file to locate duration validity flag",
+       "Write correct duration units word (incl. estimated flag 0x20) per task",
+       "Milestone flag for zero-duration tasks (FixedMeta bit)",
+       "Summary task duration computed in working time from children"]},
+    {"title": "Epic: Resources and assignments",
+     "body": "TBkndRsc and TBkndAssn streams. The template contains phantom per-task assignment records that currently leak into output.",
+     "features": [
+       "Clear or regenerate TBkndAssn so no phantom assignments appear",
+       "Write resource records (name, initials, type, max units) via 0x0C40 field class",
+       "Write assignment records linking tasks to resources with units",
+       "Resource GUIDs and cross-references in Fixed2Data"]},
+    {"title": "Epic: Calendars",
+     "body": "TBkndCal streams. Project calendar (working week, hours), calendar exceptions, per-task calendar reference (CALENDAR_UNIQUE_ID).",
+     "features": [
+       "Preserve template Standard calendar and set project default calendar",
+       "Write working-week definition (days/hours)",
+       "Write calendar exceptions (holidays)",
+       "Per-task calendar assignment"]},
+    {"title": "Epic: Additional task fields",
+     "body": "Everything on a task beyond name/dates/duration/hierarchy.",
+     "features": [
+       "Task notes (RTF var-data, field 15/94)",
+       "WBS and outline number strings",
+       "Constraints (type + date) and deadlines",
+       "Percent complete, actual start/finish",
+       "Priority, task type, effort-driven flags",
+       "Manual vs auto scheduled task mode (Fixed2Meta bit 1280)",
+       "Custom Text/Number/Date/Flag fields"]},
+    {"title": "Epic: Project properties and metadata",
+     "body": "Props stream (114/Props), Props14 header, SummaryInformation.",
+     "features": [
+       "Title in SummaryInformation stream (currently only Props TITLE)",
+       "Author, company, subject, keywords",
+       "Project finish date, status date, currency",
+       "Next-unique-ID counters so tasks added in Project after open get correct UIDs",
+       "Document Props14 header fields"]},
+    {"title": "Epic: Round-trip fidelity and validation",
+     "body": "A file we write, opened and re-saved by Project, should describe the same schedule; and we should catch invalid output before Project does.",
+     "features": [
+       "Golden-file test: generated vs Project-resaved schedule equality via MPXJ",
+       "Validator: uid uniqueness, parent references, level consistency, link cycles",
+       "Update view scroll position (CV_iew) so Gantt opens on the schedule, not 2006",
+       "Support templates written by Project 2013/2016/2019/2021/M365 (record-size detection)",
+       "Support DIFAT in CFB writer for files > 6.8 MB"]},
+    {"title": "Epic: Packaging, docs and release",
+     "body": "Make it installable and usable by people who are not us.",
+     "features": [
+       "Publish to PyPI",
+       "Sphinx/mkdocs site from docs/FORMAT_NOTES.md",
+       "Contribution guide for format findings (issue template exists)",
+       "Example gallery: JSON specs and screenshots of the result in Project"]},
+    {"title": "Epic: NoodlePlanner integration",
+     "body": "Expose .mpp export from NoodlePlanner using this library.",
+     "features": [
+       "Map NoodlePlanner markdown task model to pymppwriter Project/Task/Relation",
+       "Export endpoint serving .mpp with correct MIME type (application/vnd.ms-project)",
+       "Template management: bundle or upload template.mpp per deployment",
+       "Round-trip: import .mpp back into NoodlePlanner (via MPXJ or own reader)"]}
+  ]
+}
