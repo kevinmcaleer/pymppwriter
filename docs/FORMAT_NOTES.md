@@ -106,6 +106,37 @@ Project writes 10 var entries per task (baseline/deliverable placeholders); the 
 FixedData record 20 bytes: `uint32 uid, uint32 predUID, uint32 succUID, uint16 type (0 FF,1 FS,2 SF,3 SS), uint16 lagUnits, int32 lag`.
 Fixed2Data record 48 bytes: `GUID link, GUID pred, GUID succ`.
 
+## Resources (TBkndRsc)
+Layout from RESOURCE_FIELD_MAP (native class 0x0C40). Record ~188 bytes; key fields:
+`0 UNIQUE_ID, 4 ID, 44 MAX_UNITS (double, 10000.0 = 100%), 28 STANDARD_RATE (double)`, plus the work/cost
+doubles; block 1 (40 bytes): `0 GUID, 16 double position (row order, uid 0 = 1.0), 24 CALENDAR_GUID`.
+Field id 56 (int32 at +16) = the uid of the resource's calendar record in TBkndCal.
+Name (id 1), initials (2), email (35) are Var2Data strings keyed by native id.
+Every project — even a blank one — contains 3 deleted stubs plus a full-size **uid-0 "Unassigned"
+resource record**, which is the writer's prototype. A resource's GUID, its CALENDAR_GUID and its
+calendar record's GUID are all the same GUID.
+
+## Assignments (TBkndAssn)
+Layout from ASSIGNMENT_FIELD_MAP (0x0F40). FixedData record 110 bytes:
+`0 UNIQUE_ID, 4 TASK_UNIQUE_ID, 8 RESOURCE_UNIQUE_ID (int32; 0xFFFF0001 = unassigned), 12 Start, 16 Finish,
+20 Resume, 36 Stop, 46 ASSIGNMENT_UNITS (double, 10000.0 = 100%), 54 WORK (double, minutes × 1000 =
+duration tenths × 100), 70 REGULAR_WORK, 78 REMAINING_WORK`.
+Fixed2Data record 48 bytes: `GUID assignment, GUID task, GUID resource` — the join keys Project uses.
+Meta item sizes 34 / 53. **Project overrides a task's duration with its assignments' data joined by task
+unique id** — which is why the template's phantom unassigned records (one per task) must never be kept.
+Var entries per assignment (cloned from the phantom prototype): keys 16, 32, 49, 146, 147, 267 and
+634 = creation timestamp.
+
+## Calendars (TBkndCal)
+FixedData: 16-byte deleted stubs, then 12-byte records of three int32 columns: calendar uid, base
+calendar uid, owning resource uid (-1s for a base calendar like Standard). **Column order varies by
+Project version** — (uid, base, resource) in 2010-era files, (base, resource, uid) in M365 files — so
+detect it: the Standard row is the one with two -1 columns, and its non-null column is the uid column.
+Fixed2Data record 48 bytes: `GUID calendar (= the owning resource's GUID), GUID calendar again, GUID of
+the base calendar` (zeros for Standard's own row beyond the first). Meta items 10 / 9-10 bytes.
+The working-week definition lives in Var2Data key 1 on the base calendar; per-resource calendars with no
+exceptions carry no var data. Each resource needs its own calendar record (base = Standard).
+
 ## Verified against Microsoft Project (M365, Sep 2026)
 Container writer, task records, hierarchy, FS links, Props start date and title all open cleanly by double-click.
 Durations verified correct, including display units (days/weeks), the estimated "?" flag, 0-day milestones and
@@ -122,6 +153,7 @@ The "every task shows 1 day?" defect had three causes, found by A/B tests in Pro
    written per task — Project honours them exactly as described above.
 
 ## Not yet handled
-Resources, assignments (cleared, not yet writable), calendars, notes, custom fields, SummaryInformation title
-(MPXJ reads the title from there, Project from Props), baselines, timephased data, view scroll position
-(CV_iew — the Gantt opens scrolled to the template's dates).
+Resource rates/costs and material resources, assignment actual work / percent complete, calendar
+working-week edits and exceptions, notes, custom fields, SummaryInformation title (MPXJ reads the title
+from there, Project from Props), baselines, timephased data, view scroll position (CV_iew — the Gantt
+opens scrolled to the template's dates).

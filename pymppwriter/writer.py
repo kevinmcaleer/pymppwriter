@@ -19,13 +19,25 @@ PROJECT_CLSID = uuid.UUID("74B78F3A-C8C8-11D1-BE11-00C04FB6FAF1").bytes_le
 PRJ = "   114"
 TASK_META_SIZE, TASK_META2_SIZE = 47, 92
 REL_META_SIZE, REL_META2_SIZE = 10, 9
+RSC_META_SIZE = 37
+ASSN_META_SIZE = 34
+CAL_META_SIZE = 10
 TENTHS_PER_DAY = 4800          # 8h * 60m * 10
 NATIVE = {"UNIQUE_ID": 86, "ID": 23, "NAME": 14, "START": 35, "FINISH": 36, "DURATION": 29,
           "REMAINING_DURATION": 31, "OUTLINE_LEVEL": 249, "PARENT_UID": 160, "EARLY_START": 37,
           "EARLY_FINISH": 38, "LATE_START": 39, "LATE_FINISH": 40, "CREATED": 93, "GUID": 1143,
           "MILESTONE": 24, "SUMMARY": 92, "ESTIMATED": 396, "ACTUAL_DURATION_UNITS": 181,
           "TASK_MODE": 1280}
+RSC_NATIVE = {"UNIQUE_ID": 27, "ID": 0, "NAME": 1, "INITIALS": 2, "EMAIL_ADDRESS": 35,
+              "MAX_UNITS": 4, "CALENDAR_UID": 56, "GUID": 728, "CALENDAR_GUID": 729,
+              "POSITION": 730}
+ASSN_NATIVE = {"UNIQUE_ID": 0, "TASK_UNIQUE_ID": 1, "RESOURCE_UNIQUE_ID": 2, "START": 20,
+               "FINISH": 21, "RESUME": 24, "STOP": 264, "UNITS": 7, "WORK": 8,
+               "REGULAR_WORK": 11, "REMAINING_WORK": 12, "GUID": 636, "TASK_GUID": 637,
+               "RESOURCE_GUID": 638, "CREATED": 634}
 REL_TYPES = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
+PCT_SCALE = 10000.0            # resource max units / assignment units: 10000.0 = 100%
+WORK_SCALE = 100.0             # work doubles are minutes*1000 = duration tenths * 100
 UNITS_CODES = {"m": 3, "h": 5, "d": 7, "w": 9, "mo": 11}
 SUMMARY_UNITS = 0x15           # what Project writes in the units word of summary rows
 ESTIMATED_FLAG = 0x20          # OR'ed into the units word; shows as "3 days?"
@@ -72,11 +84,30 @@ class Relation:
 
 
 @dataclass
+class Resource:
+    uid: int                       # unique, > 0
+    name: str
+    initials: str = ""
+    email: str = ""
+    max_units: float = 1.0         # 1.0 = 100%
+    guid: bytes = field(default_factory=lambda: uuid.uuid4().bytes_le)
+
+
+@dataclass
+class Assignment:
+    task_uid: int
+    resource_uid: int
+    units: float = 1.0             # 1.0 = 100%
+
+
+@dataclass
 class Project:
     title: str
     start: datetime
     tasks: List[Task] = field(default_factory=list)
     relations: List[Relation] = field(default_factory=list)
+    resources: List[Resource] = field(default_factory=list)
+    assignments: List[Assignment] = field(default_factory=list)
 
 
 class MppWriter:
@@ -85,15 +116,23 @@ class MppWriter:
         self.prj = self.root.storage_path(PRJ)
         hdr, props, order = B.parse_props(self._get(f"{PRJ}/Props"))
         self.props_hdr, self.props, self.props_order = hdr, props, order
-        self.task_fm = {}
-        self.task_bit = {}    # native id -> field map entry index = bit index in FixedMeta/Fixed2Meta
-        for i, it in enumerate(B.parse_field_map(props[B.PROPS_TASK_FIELD_MAP])):
-            if it.in_fixed:
-                self.task_fm.setdefault(it.type_value & 0xFFFF, it)
-            self.task_bit.setdefault(it.type_value & 0xFFFF, i)
+        self.task_fm, self.task_bit = self._parse_class_map(B.PROPS_TASK_FIELD_MAP)
+        self.rsc_fm, self.rsc_bit = self._parse_class_map(B.PROPS_RESOURCE_FIELD_MAP)
+        self.assn_fm, self.assn_bit = self._parse_class_map(B.PROPS_ASSIGNMENT_FIELD_MAP)
         self._load_prototypes()
 
     # ------------------------------------------------------------ helpers --
+    def _parse_class_map(self, props_key: int):
+        """fm: native id -> fixed FieldItem; bit: native id -> field map entry index
+        (= bit index in the FixedMeta/Fixed2Meta bitmap)."""
+        fm, bit = {}, {}
+        for i, it in enumerate(B.parse_field_map(self.props[props_key])):
+            tid = it.type_value & 0xFFFF
+            if it.in_fixed:
+                fm.setdefault(tid, it)
+            bit.setdefault(tid, i)
+        return fm, bit
+
     def _get(self, path: str) -> bytes:
         s = self.root
         parts = path.split("/")
@@ -103,6 +142,36 @@ class MppWriter:
 
     def _set(self, path: str, data: bytes) -> None:
         self.root.set_path(path, data)
+
+    # block-aware field writers for any entity class (fm = that class's fixed map)
+    @staticmethod
+    def _putf(fm: dict, native: dict, rec: bytearray, rec2: bytearray, name: str, fmt: str, value) -> None:
+        it = fm.get(native[name])
+        if it is None:
+            return
+        dst = rec if it.block == 0 else rec2
+        if it.offset + struct.calcsize(fmt) <= len(dst):
+            struct.pack_into(fmt, dst, it.offset, value)
+
+    @staticmethod
+    def _putf_bytes(fm: dict, native: dict, rec: bytearray, rec2: bytearray, name: str, value: bytes) -> None:
+        it = fm.get(native[name])
+        if it is None:
+            return
+        dst = rec if it.block == 0 else rec2
+        if it.offset + len(value) <= len(dst):
+            dst[it.offset:it.offset + len(value)] = value
+
+    @classmethod
+    def _putf_ts(cls, fm: dict, native: dict, rec: bytearray, rec2: bytearray, name: str,
+                 dt: Optional[datetime]) -> None:
+        cls._putf_bytes(fm, native, rec, rec2, name, B.encode_timestamp(dt))
+
+    @staticmethod
+    def _bitf(bits: dict, native: dict, meta: bytearray, meta2: bytearray, name: str, value: bool) -> None:
+        idx = bits.get(native[name])
+        if idx is not None:
+            B.set_meta_bit(meta, meta2, idx, value)
 
     def _load_prototypes(self) -> None:
         t = f"{PRJ}/TBkndTask"
@@ -136,13 +205,90 @@ class MppWriter:
         self.rel_proto = None
         if rrecs and len(rrecs[0]) >= 20:
             self.rel_proto = dict(rec=rrecs[0], rec2=rrecs2[0], meta=rmitems[0], meta2=rm2items[0])
-        # assignments: only the stream headers — the template's phantom per-task
-        # assignment records are cleared on write (Project overrides task duration
-        # with assignment data joined by task UID)
+        # assignments: the template's phantom per-task records (Project creates one
+        # unassigned assignment per task) are never emitted as-is — they override
+        # task durations when joined by task UID — but the first one is the
+        # prototype for real assignments
         a = f"{PRJ}/TBkndAssn"
-        self.assn_meta_hdr = self._get(f"{a}/FixedMeta")[:16]
-        self.assn_meta2_hdr = self._get(f"{a}/Fixed2Meta")[:16]
-        self.assn_var_hdr = self._get(f"{a}/VarMeta")[:24]
+        amd = self._get(f"{a}/FixedMeta")
+        amh, _, amitems = B.parse_fixed_meta(amd, ASSN_META_SIZE)
+        arecs = B.split_fixed_data(self._get(f"{a}/FixedData"), amitems)
+        am2d = self._get(f"{a}/Fixed2Meta")
+        am2n = struct.unpack_from("<I", am2d, 8)[0]
+        am2size = (len(am2d) - 16) // am2n if am2n else 0
+        am2h, _, am2items = B.parse_fixed_meta(am2d, am2size) if am2n else (am2d[:16], 0, [])
+        arecs2 = B.split_fixed_data(self._get(f"{a}/Fixed2Data"), am2items)
+        avh, avtable, _ = B.parse_var_meta(self._get(f"{a}/VarMeta"))
+        avdata = self._get(f"{a}/Var2Data")
+        self.assn_meta_hdr, self.assn_meta2_hdr, self.assn_var_hdr = amh[:16], am2h[:16], avh[:24]
+        self.assn_proto = None
+        for i, rec in enumerate(arecs):
+            if len(rec) > 50 and i < len(arecs2):
+                uid = struct.unpack_from("<I", rec, 0)[0]
+                var = [(typ, B.read_var(avdata, off)) for typ, off in sorted(avtable.get(uid, {}).items())]
+                self.assn_proto = dict(rec=rec, rec2=arecs2[i], meta=amitems[i], meta2=am2items[i], var=var)
+                break
+        # resources: the uid-0 "Unassigned" system record (present even in a blank
+        # project) is the prototype for real resource records
+        rs = f"{PRJ}/TBkndRsc"
+        rsmh, _, rsmitems = B.parse_fixed_meta(self._get(f"{rs}/FixedMeta"), RSC_META_SIZE)
+        rsrecs = B.split_fixed_data(self._get(f"{rs}/FixedData"), rsmitems)
+        rsm2d = self._get(f"{rs}/Fixed2Meta")
+        rsm2n = struct.unpack_from("<I", rsm2d, 8)[0]
+        rsm2size = (len(rsm2d) - 16) // rsm2n if rsm2n else 0
+        rsm2h, _, rsm2items = B.parse_fixed_meta(rsm2d, rsm2size) if rsm2n else (rsm2d[:16], 0, [])
+        rsrecs2 = B.split_fixed_data(self._get(f"{rs}/Fixed2Data"), rsm2items)
+        rsvh, rsvtable, _ = B.parse_var_meta(self._get(f"{rs}/VarMeta"))
+        rsvdata = self._get(f"{rs}/Var2Data")
+        self.rsc_meta_hdr, self.rsc_meta2_hdr, self.rsc_var_hdr = rsmh[:16], rsm2h[:16], rsvh[:24]
+        self.rsc_rows = []       # (rec, rec2, meta, meta2, [(var type, payload)]) for stubs + uid 0
+        self.rsc_proto = None
+        for i, rec in enumerate(rsrecs):
+            uid = struct.unpack_from("<I", rec, 0)[0] if len(rec) >= 4 else 0
+            var = [(typ, B.read_var(rsvdata, off)) for typ, off in sorted(rsvtable.get(uid, {}).items())] \
+                if len(rec) > 16 else []
+            row = dict(rec=rec, rec2=rsrecs2[i] if i < len(rsrecs2) else b"",
+                       meta=rsmitems[i], meta2=rsm2items[i] if i < len(rsm2items) else b"", var=var)
+            self.rsc_rows.append(row)
+            if len(rec) > 100 and uid == 0:
+                self.rsc_proto = row
+        # calendars: keep every existing record; clone the uid-0 resource's calendar
+        # for new resources. The three dwords of a 12-byte calendar record are
+        # (calendar uid, base calendar uid, resource uid) in an order that varies by
+        # Project version, so detect the columns from the template's own records.
+        cl = f"{PRJ}/TBkndCal"
+        clmh, _, clmitems = B.parse_fixed_meta(self._get(f"{cl}/FixedMeta"), CAL_META_SIZE)
+        clrecs = B.split_fixed_data(self._get(f"{cl}/FixedData"), clmitems)
+        clm2d = self._get(f"{cl}/Fixed2Meta")
+        clm2n = struct.unpack_from("<I", clm2d, 8)[0]
+        clm2size = (len(clm2d) - 16) // clm2n if clm2n else 0
+        clm2h, _, clm2items = B.parse_fixed_meta(clm2d, clm2size) if clm2n else (clm2d[:16], 0, [])
+        clrecs2 = B.split_fixed_data(self._get(f"{cl}/Fixed2Data"), clm2items)
+        self.cal_meta_hdr, self.cal_meta2_hdr = clmh[:16], clm2h[:16]
+        self.cal_rows = [dict(rec=clrecs[i], rec2=clrecs2[i] if i < len(clrecs2) else b"",
+                              meta=clmitems[i], meta2=clm2items[i] if i < len(clm2items) else b"")
+                         for i in range(len(clrecs))]
+        self.cal_proto = self.cal_cols = self.cal_standard_uid = self.cal_standard_guid = None
+        base_row = None
+        for row in self.cal_rows:
+            if len(row["rec"]) == 12:
+                d = struct.unpack("<3i", row["rec"])
+                if d.count(-1) == 2:                       # base calendar row (Standard)
+                    uid_col = next(j for j in range(3) if d[j] != -1)
+                    base_row = row
+                    self.cal_standard_uid = d[uid_col]
+                    self.cal_standard_guid = row["rec2"][:16]
+                    self.cal_uid_col = uid_col
+        if base_row is not None:
+            for row in self.cal_rows:
+                if len(row["rec"]) == 12 and row is not base_row:
+                    d = struct.unpack("<3i", row["rec"])
+                    others = [j for j in range(3) if j != self.cal_uid_col]
+                    base_col = next((j for j in others if d[j] == self.cal_standard_uid), others[0])
+                    rsc_col = next(j for j in others if j != base_col)
+                    self.cal_cols = (self.cal_uid_col, base_col, rsc_col)
+                    self.cal_proto = row
+                    break
 
     def _put(self, rec: bytearray, name: str, fmt: str, value) -> None:
         it = self.task_fm.get(NATIVE[name])
@@ -281,24 +427,135 @@ class MppWriter:
         self._set(f"{c}/Fixed2Data", rfd2)
         self._set(f"{c}/Fixed2Meta", B.build_fixed_meta(self.rel_meta2_hdr, rfm2, len(rfd2)))
 
-        # assignments: clear the template's phantom per-task records — Project joins
-        # them to tasks by unique id and overrides the task's duration from them
+        # resources ------------------------------------------------------------
+        rsc_count = None
+        if project.resources:
+            if self.rsc_proto is None:
+                raise ValueError("template has no uid-0 resource record to use as a prototype")
+            uids = [r.uid for r in project.resources]
+            if len(set(uids)) != len(uids) or any(u <= 0 for u in uids):
+                raise ValueError("resource uids must be unique and > 0")
+            cal_uids = [struct.unpack("<3i", row["rec"])[self.cal_cols[0]]
+                        for row in self.cal_rows if len(row["rec"]) == 12] if self.cal_cols else [1]
+            next_cal_uid = max(cal_uids) + 1
+            rrows = [r for r in self.rsc_rows]           # stubs + uid 0, kept verbatim
+            crows = [c for c in self.cal_rows]
+            rvar_entries = [(struct.unpack_from("<I", row["rec"], 0)[0], typ, payload)
+                            for row in self.rsc_rows if len(row["rec"]) > 16
+                            for typ, payload in row["var"]]
+            for idx, res in enumerate(project.resources, start=1):
+                rec = bytearray(self.rsc_proto["rec"]); rec2 = bytearray(self.rsc_proto["rec2"])
+                m = bytearray(self.rsc_proto["meta"]); m2 = bytearray(self.rsc_proto["meta2"])
+                cal_uid = next_cal_uid + idx - 1
+                self._putf(self.rsc_fm, RSC_NATIVE, rec, rec2, "UNIQUE_ID", "<I", res.uid)
+                self._putf(self.rsc_fm, RSC_NATIVE, rec, rec2, "ID", "<I", idx)
+                self._putf(self.rsc_fm, RSC_NATIVE, rec, rec2, "MAX_UNITS", "<d", res.max_units * PCT_SCALE)
+                self._putf(self.rsc_fm, RSC_NATIVE, rec, rec2, "CALENDAR_UID", "<i", cal_uid)
+                self._putf(self.rsc_fm, RSC_NATIVE, rec, rec2, "POSITION", "<d", float(idx + 1))
+                self._putf_bytes(self.rsc_fm, RSC_NATIVE, rec, rec2, "GUID", res.guid)
+                self._putf_bytes(self.rsc_fm, RSC_NATIVE, rec, rec2, "CALENDAR_GUID", res.guid)
+                for name in ("UNIQUE_ID", "ID", "NAME", "MAX_UNITS"):
+                    self._bitf(self.rsc_bit, RSC_NATIVE, m, m2, name, True)
+                self._bitf(self.rsc_bit, RSC_NATIVE, m, m2, "INITIALS", bool(res.initials))
+                self._bitf(self.rsc_bit, RSC_NATIVE, m, m2, "EMAIL_ADDRESS", bool(res.email))
+                rrows.append(dict(rec=bytes(rec), rec2=bytes(rec2), meta=m, meta2=m2))
+                for typ, payload in self.rsc_proto["var"]:
+                    rvar_entries.append((res.uid, typ, payload))
+                rvar_entries.append((res.uid, RSC_NATIVE["NAME"], B.encode_unicode(res.name)))
+                if res.initials:
+                    rvar_entries.append((res.uid, RSC_NATIVE["INITIALS"], B.encode_unicode(res.initials)))
+                if res.email:
+                    rvar_entries.append((res.uid, RSC_NATIVE["EMAIL_ADDRESS"], B.encode_unicode(res.email)))
+                # per-resource calendar: (cal uid, base = Standard, resource uid),
+                # calendar GUID = resource GUID, third GUID = Standard calendar's
+                if self.cal_proto is not None:
+                    crec = bytearray(self.cal_proto["rec"])
+                    uc, bc, rc = self.cal_cols
+                    struct.pack_into("<i", crec, uc * 4, cal_uid)
+                    struct.pack_into("<i", crec, bc * 4, self.cal_standard_uid)
+                    struct.pack_into("<i", crec, rc * 4, res.uid)
+                    crec2 = bytearray(self.cal_proto["rec2"])
+                    crec2[0:16] = res.guid
+                    crec2[16:32] = res.guid
+                    crec2[32:48] = self.cal_standard_guid
+                    crows.append(dict(rec=bytes(crec), rec2=bytes(crec2),
+                                      meta=bytearray(self.cal_proto["meta"]),
+                                      meta2=bytearray(self.cal_proto["meta2"])))
+            rfd, rfm = assemble([r["rec"] for r in rrows], [bytearray(r["meta"]) for r in rrows])
+            rfd2, rfm2 = assemble([r["rec2"] for r in rrows], [bytearray(r["meta2"]) for r in rrows])
+            self._set(f"{PRJ}/TBkndRsc/FixedData", rfd)
+            self._set(f"{PRJ}/TBkndRsc/FixedMeta", B.build_fixed_meta(self.rsc_meta_hdr, rfm, len(rfd)))
+            self._set(f"{PRJ}/TBkndRsc/Fixed2Data", rfd2)
+            self._set(f"{PRJ}/TBkndRsc/Fixed2Meta", B.build_fixed_meta(self.rsc_meta2_hdr, rfm2, len(rfd2)))
+            rvm, rvd = B.build_var_blocks(self.rsc_var_hdr, rvar_entries, B.RESOURCE_FIELD_HI)
+            self._set(f"{PRJ}/TBkndRsc/VarMeta", rvm)
+            self._set(f"{PRJ}/TBkndRsc/Var2Data", rvd)
+            cfd, cfm = assemble([c["rec"] for c in crows], [bytearray(c["meta"]) for c in crows])
+            cfd2, cfm2 = assemble([c["rec2"] for c in crows], [bytearray(c["meta2"]) for c in crows])
+            self._set(f"{PRJ}/TBkndCal/FixedData", cfd)
+            self._set(f"{PRJ}/TBkndCal/FixedMeta", B.build_fixed_meta(self.cal_meta_hdr, cfm, len(cfd)))
+            self._set(f"{PRJ}/TBkndCal/Fixed2Data", cfd2)
+            self._set(f"{PRJ}/TBkndCal/Fixed2Meta", B.build_fixed_meta(self.cal_meta2_hdr, cfm2, len(cfd2)))
+            rsc_count = len(rrows)
+
+        # assignments ----------------------------------------------------------
+        # the template's phantom per-task records are never kept: Project joins them
+        # to tasks by unique id and overrides the task's duration from them
+        rsc_by_uid = {r.uid: r for r in project.resources}
+        if project.assignments and self.assn_proto is None:
+            raise ValueError("template has no assignment records to use as a prototype")
+        afixed, afixed2, ameta, ameta2, avar_entries = [], [], [], [], []
+        for i, asn in enumerate(project.assignments, start=1):
+            if asn.task_uid not in by_uid:
+                raise ValueError(f"assignment references unknown task uid {asn.task_uid}")
+            if asn.resource_uid not in rsc_by_uid:
+                raise ValueError(f"assignment references unknown resource uid {asn.resource_uid}")
+            task, res = by_uid[asn.task_uid], rsc_by_uid[asn.resource_uid]
+            start, finish, dur_tenths = eff[asn.task_uid]
+            rec = bytearray(self.assn_proto["rec"]); rec2 = bytearray(self.assn_proto["rec2"])
+            m = bytearray(self.assn_proto["meta"]); m2 = bytearray(self.assn_proto["meta2"])
+            put = lambda name, fmt, v: self._putf(self.assn_fm, ASSN_NATIVE, rec, rec2, name, fmt, v)
+            put("UNIQUE_ID", "<I", i)
+            put("TASK_UNIQUE_ID", "<I", asn.task_uid)
+            put("RESOURCE_UNIQUE_ID", "<i", asn.resource_uid)
+            put("UNITS", "<d", asn.units * PCT_SCALE)
+            work = dur_tenths * WORK_SCALE * asn.units
+            for name in ("WORK", "REGULAR_WORK", "REMAINING_WORK"):
+                put(name, "<d", work)
+            for name in ("START", "RESUME", "STOP"):
+                self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, name, start)
+            self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "FINISH", finish)
+            self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "GUID", uuid.uuid4().bytes_le)
+            self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "TASK_GUID", task.guid)
+            self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "RESOURCE_GUID", res.guid)
+            for name in ("UNIQUE_ID", "TASK_UNIQUE_ID", "RESOURCE_UNIQUE_ID", "UNITS", "WORK"):
+                self._bitf(self.assn_bit, ASSN_NATIVE, m, m2, name, True)
+            afixed.append(bytes(rec)); afixed2.append(bytes(rec2))
+            ameta.append(m); ameta2.append(m2)
+            for typ, payload in self.assn_proto["var"]:
+                if typ == ASSN_NATIVE["CREATED"]:
+                    payload = B.encode_timestamp(datetime.now().replace(second=0, microsecond=0))
+                avar_entries.append((i, typ, payload))
         a = f"{PRJ}/TBkndAssn"
-        self._set(f"{a}/FixedData", b"")
-        self._set(f"{a}/FixedMeta", B.build_fixed_meta(self.assn_meta_hdr, [], 0))
-        self._set(f"{a}/Fixed2Data", b"")
-        self._set(f"{a}/Fixed2Meta", B.build_fixed_meta(self.assn_meta2_hdr, [], 0))
-        avm = bytearray(self.assn_var_hdr)
-        struct.pack_into("<I", avm, 8, 0)     # entry count
-        struct.pack_into("<I", avm, 20, 0)    # Var2Data size
-        self._set(f"{a}/VarMeta", bytes(avm))
-        self._set(f"{a}/Var2Data", b"")
+        afd, afm = assemble(afixed, ameta)
+        afd2, afm2 = assemble(afixed2, ameta2)
+        self._set(f"{a}/FixedData", afd)
+        self._set(f"{a}/FixedMeta", B.build_fixed_meta(self.assn_meta_hdr, afm, len(afd)))
+        self._set(f"{a}/Fixed2Data", afd2)
+        self._set(f"{a}/Fixed2Meta", B.build_fixed_meta(self.assn_meta2_hdr, afm2, len(afd2)))
+        avm, avd = B.build_var_blocks(self.assn_var_hdr, avar_entries, B.ASSIGNMENT_FIELD_HI)
+        self._set(f"{a}/VarMeta", avm)
+        self._set(f"{a}/Var2Data", avd)
 
         # record-count dwords: Project sizes its tables from these and drops records
         # beyond the count
-        for key, n in ((B.PROPS_TASK_RECORD_COUNT, len(fixed)),
-                       (B.PROPS_ASSN_RECORD_COUNT, 0),
-                       (B.PROPS_REL_RECORD_COUNT, len(project.relations))):
+        counters = [(B.PROPS_TASK_RECORD_COUNT, len(fixed)),
+                    (B.PROPS_ASSN_RECORD_COUNT, len(project.assignments)),
+                    (B.PROPS_REL_RECORD_COUNT, len(project.relations))]
+        if rsc_count is not None:
+            counters += [(B.PROPS_RESOURCE_RECORD_COUNT, rsc_count),
+                         (B.PROPS_RESOURCE_RECORD_COUNT + 1, rsc_count + 2)]   # 0x1000003, see FORMAT_NOTES
+        for key, n in counters:
             if key in self.props:
                 self.props[key] = struct.pack("<I", n)
 

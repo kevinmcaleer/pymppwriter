@@ -9,7 +9,7 @@ import json
 import sys
 from datetime import datetime
 
-from .writer import MppWriter, Project, Task, Relation
+from .writer import MppWriter, Project, Task, Relation, Resource, Assignment
 
 
 def _dt(s: str) -> datetime:
@@ -28,7 +28,11 @@ def load_project(path: str) -> Project:
                   parent_uid=t.get("parent_uid", 0), duration_units=t.get("duration_units", "d"),
                   estimated=t.get("estimated", False)) for t in spec["tasks"]]
     rels = [Relation(r["pred"], r["succ"], r.get("type", "FS"), r.get("lag_days", 0.0)) for r in spec.get("links", [])]
-    return Project(spec["title"], _dt(spec["start"]), tasks, rels)
+    rscs = [Resource(uid=r["uid"], name=r["name"], initials=r.get("initials", ""),
+                     email=r.get("email", ""), max_units=r.get("max_units", 1.0))
+            for r in spec.get("resources", [])]
+    assns = [Assignment(a["task"], a["resource"], a.get("units", 1.0)) for a in spec.get("assignments", [])]
+    return Project(spec["title"], _dt(spec["start"]), tasks, rels, rscs, assns)
 
 
 def main(argv=None) -> int:
