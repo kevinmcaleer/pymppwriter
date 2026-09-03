@@ -18,6 +18,12 @@ PROPS_RELATION_FIELD_MAP = 131094
 PROPS_ASSIGNMENT_FIELD_MAP = 131095
 PROPS_PROJECT_START_DATE = 37748738
 PROPS_TITLE = 37748744
+# record-count dwords: Project sizes its tables from these on load and drops
+# records beyond the count (verified against four Project-written files)
+PROPS_TASK_RECORD_COUNT = 16777217        # 0x1000001, includes stubs + uid-0 summary
+PROPS_RESOURCE_RECORD_COUNT = 16777218    # 0x1000002
+PROPS_ASSN_RECORD_COUNT = 16777220        # 0x1000004
+PROPS_REL_RECORD_COUNT = 16777221         # 0x1000005
 
 
 # ---------------------------------------------------------------- Props ----

@@ -136,6 +136,13 @@ class MppWriter:
         self.rel_proto = None
         if rrecs and len(rrecs[0]) >= 20:
             self.rel_proto = dict(rec=rrecs[0], rec2=rrecs2[0], meta=rmitems[0], meta2=rm2items[0])
+        # assignments: only the stream headers — the template's phantom per-task
+        # assignment records are cleared on write (Project overrides task duration
+        # with assignment data joined by task UID)
+        a = f"{PRJ}/TBkndAssn"
+        self.assn_meta_hdr = self._get(f"{a}/FixedMeta")[:16]
+        self.assn_meta2_hdr = self._get(f"{a}/Fixed2Meta")[:16]
+        self.assn_var_hdr = self._get(f"{a}/VarMeta")[:24]
 
     def _put(self, rec: bytearray, name: str, fmt: str, value) -> None:
         it = self.task_fm.get(NATIVE[name])
@@ -251,29 +258,49 @@ class MppWriter:
         self._set(f"{t}/VarMeta", vm)
         self._set(f"{t}/Var2Data", vd)
 
-        # relations
-        if project.relations:
-            if self.rel_proto is None:
-                raise ValueError("template has no dependency records to use as a prototype; "
-                                 "save the template with at least one linked pair of tasks")
-            rfixed, rfixed2, rmeta, rmeta2 = [], [], [], []
-            for i, r in enumerate(project.relations, start=1):
-                rec = bytearray(self.rel_proto["rec"]); rec2 = bytearray(self.rel_proto["rec2"])
-                struct.pack_into("<III", rec, 0, i, r.pred_uid, r.succ_uid)
-                struct.pack_into("<HH", rec, 12, REL_TYPES[r.type], 7)  # lag units: days
-                struct.pack_into("<i", rec, 16, int(round(r.lag_days * TENTHS_PER_DAY)))
-                rec2[0:16] = uuid.uuid4().bytes_le
-                rec2[16:32] = by_uid[r.pred_uid].guid
-                rec2[32:48] = by_uid[r.succ_uid].guid
-                rfixed.append(bytes(rec)); rfixed2.append(bytes(rec2))
-                rmeta.append(bytearray(self.rel_proto["meta"])); rmeta2.append(bytearray(self.rel_proto["meta2"]))
-            rfd, rfm = assemble(rfixed, rmeta)
-            rfd2, rfm2 = assemble(rfixed2, rmeta2)
-            c = f"{PRJ}/TBkndCons"
-            self._set(f"{c}/FixedData", rfd)
-            self._set(f"{c}/FixedMeta", B.build_fixed_meta(self.rel_meta_hdr, rfm, len(rfd)))
-            self._set(f"{c}/Fixed2Data", rfd2)
-            self._set(f"{c}/Fixed2Meta", B.build_fixed_meta(self.rel_meta2_hdr, rfm2, len(rfd2)))
+        # relations — always rebuilt, so the template's own links never leak through
+        if project.relations and self.rel_proto is None:
+            raise ValueError("template has no dependency records to use as a prototype; "
+                             "save the template with at least one linked pair of tasks")
+        rfixed, rfixed2, rmeta, rmeta2 = [], [], [], []
+        for i, r in enumerate(project.relations, start=1):
+            rec = bytearray(self.rel_proto["rec"]); rec2 = bytearray(self.rel_proto["rec2"])
+            struct.pack_into("<III", rec, 0, i, r.pred_uid, r.succ_uid)
+            struct.pack_into("<HH", rec, 12, REL_TYPES[r.type], 7)  # lag units: days
+            struct.pack_into("<i", rec, 16, int(round(r.lag_days * TENTHS_PER_DAY)))
+            rec2[0:16] = uuid.uuid4().bytes_le
+            rec2[16:32] = by_uid[r.pred_uid].guid
+            rec2[32:48] = by_uid[r.succ_uid].guid
+            rfixed.append(bytes(rec)); rfixed2.append(bytes(rec2))
+            rmeta.append(bytearray(self.rel_proto["meta"])); rmeta2.append(bytearray(self.rel_proto["meta2"]))
+        rfd, rfm = assemble(rfixed, rmeta)
+        rfd2, rfm2 = assemble(rfixed2, rmeta2)
+        c = f"{PRJ}/TBkndCons"
+        self._set(f"{c}/FixedData", rfd)
+        self._set(f"{c}/FixedMeta", B.build_fixed_meta(self.rel_meta_hdr, rfm, len(rfd)))
+        self._set(f"{c}/Fixed2Data", rfd2)
+        self._set(f"{c}/Fixed2Meta", B.build_fixed_meta(self.rel_meta2_hdr, rfm2, len(rfd2)))
+
+        # assignments: clear the template's phantom per-task records — Project joins
+        # them to tasks by unique id and overrides the task's duration from them
+        a = f"{PRJ}/TBkndAssn"
+        self._set(f"{a}/FixedData", b"")
+        self._set(f"{a}/FixedMeta", B.build_fixed_meta(self.assn_meta_hdr, [], 0))
+        self._set(f"{a}/Fixed2Data", b"")
+        self._set(f"{a}/Fixed2Meta", B.build_fixed_meta(self.assn_meta2_hdr, [], 0))
+        avm = bytearray(self.assn_var_hdr)
+        struct.pack_into("<I", avm, 8, 0)     # entry count
+        struct.pack_into("<I", avm, 20, 0)    # Var2Data size
+        self._set(f"{a}/VarMeta", bytes(avm))
+        self._set(f"{a}/Var2Data", b"")
+
+        # record-count dwords: Project sizes its tables from these and drops records
+        # beyond the count
+        for key, n in ((B.PROPS_TASK_RECORD_COUNT, len(fixed)),
+                       (B.PROPS_ASSN_RECORD_COUNT, 0),
+                       (B.PROPS_REL_RECORD_COUNT, len(project.relations))):
+            if key in self.props:
+                self.props[key] = struct.pack("<I", n)
 
         # project properties: start date + title
         self.props[B.PROPS_PROJECT_START_DATE] = B.encode_timestamp(project.start)

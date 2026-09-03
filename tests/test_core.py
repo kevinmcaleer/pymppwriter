@@ -114,3 +114,10 @@ def test_writer_end_to_end_with_template(tmp_path):
     assert dur(3) == 0 and bit(3, "MILESTONE") == 1           # zero duration -> milestone
     assert units(4) == 0x27 and bit(4, "ESTIMATED") == 1      # estimated flag 0x20
     assert bit(2, "ESTIMATED") == 0
+    # phantom assignments cleared, record counters patched
+    assert ole.get_size("   114/TBkndAssn/FixedData") == 0
+    assert struct.unpack_from("<I", ole.openstream("   114/TBkndAssn/FixedMeta").read(), 8)[0] == 0
+    _, props, _ = B.parse_props(ole.openstream("   114/Props").read())
+    assert struct.unpack("<I", props[B.PROPS_TASK_RECORD_COUNT])[0] == len(recs)
+    assert struct.unpack("<I", props[B.PROPS_ASSN_RECORD_COUNT])[0] == 0
+    assert struct.unpack("<I", props[B.PROPS_REL_RECORD_COUNT])[0] == 1
