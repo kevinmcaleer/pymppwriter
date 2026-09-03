@@ -428,12 +428,23 @@ class MppWriter:
                                  for row in self.cal_rows if len(row["rec"]) == 12]
         next_cal_uid = max(existing_cal_uids) + 1
         cal_rows_out = list(self.cal_rows)
+        cal_meta_patched = False
         cal_var_new = []
         named_cal_uid = {"Standard": std_uid}
         if project.calendar is not None and (project.calendar.week or project.calendar.exceptions):
             cal_var_new.append((std_uid, CAL_DATA_VAR,
                                 B.build_calendar_data(project.calendar.day_blocks(),
                                                       project.calendar.exception_tuples())))
+            # the record's meta gates the var data: byte 2 counts the record's
+            # var entries, trailing-byte bit 0x80 marks the data blob — without
+            # them Project never reads the blob
+            for i, row in enumerate(cal_rows_out):
+                if row is self.cal_base_row:
+                    m = bytearray(row["meta"])
+                    m[2] += 1
+                    m[8] |= 0x80
+                    cal_rows_out[i] = dict(row, meta=bytes(m))
+                    cal_meta_patched = True
         for cal in project.calendars:
             if self.cal_base_row is None:
                 raise ValueError("template has no base calendar record to clone")
@@ -447,11 +458,16 @@ class MppWriter:
                 struct.pack_into("<i", crec, j * 4, uid if j == self.cal_uid_col else -1)
             crec2 = bytearray(48)
             crec2[0:16] = cal.guid
+            has_data = bool(cal.week or cal.exceptions)
+            m = bytearray(self.cal_base_row["meta"])
+            m[2] = 2 if has_data else 1        # var entry count: name (+ data blob)
+            if has_data:
+                m[8] |= 0x80
             cal_rows_out.append(dict(rec=bytes(crec), rec2=bytes(crec2),
-                                     meta=bytearray(self.cal_base_row["meta"]),
+                                     meta=bytes(m),
                                      meta2=bytearray(self.cal_base_row["meta2"])))
             cal_var_new.append((uid, CAL_NAME_VAR, B.encode_unicode(cal.name)))
-            if cal.week or cal.exceptions:
+            if has_data:
                 cal_var_new.append((uid, CAL_DATA_VAR,
                                     B.build_calendar_data(cal.day_blocks(), cal.exception_tuples())))
 
@@ -573,6 +589,8 @@ class MppWriter:
             for idx, res in enumerate(project.resources, start=1):
                 rec = bytearray(self.rsc_proto["rec"]); rec2 = bytearray(self.rsc_proto["rec2"])
                 m = bytearray(self.rsc_proto["meta"]); m2 = bytearray(self.rsc_proto["meta2"])
+                # meta byte 2 counts the record's var entries
+                m[2] = len(self.rsc_proto["var"]) + 1 + bool(res.initials) + bool(res.email)
                 cal_uid = next_cal_uid
                 next_cal_uid += 1
                 self._putf(self.rsc_fm, RSC_NATIVE, rec, rec2, "UNIQUE_ID", "<I", res.uid)
@@ -621,8 +639,9 @@ class MppWriter:
             rsc_count = len(rrows)
 
         # TBkndCal: fixed streams rewritten when rows were added (new base or
-        # resource calendars); var streams when names/data blobs were added
-        if len(cal_rows_out) != len(self.cal_rows):
+        # resource calendars) or metas patched; var streams when names/data
+        # blobs were added
+        if len(cal_rows_out) != len(self.cal_rows) or cal_meta_patched:
             cfd, cfm = assemble([c["rec"] for c in cal_rows_out], [bytearray(c["meta"]) for c in cal_rows_out])
             cfd2, cfm2 = assemble([c["rec2"] for c in cal_rows_out], [bytearray(c["meta2"]) for c in cal_rows_out])
             self._set(f"{PRJ}/TBkndCal/FixedData", cfd)
