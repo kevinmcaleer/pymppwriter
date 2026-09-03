@@ -113,6 +113,18 @@ def parse_fixed_meta(data: bytes, item_size: int) -> Tuple[bytes, int, List[byte
     return data[:16], count, items
 
 
+def parse_fixed_meta_auto(data: bytes, default_size: int) -> Tuple[bytes, int, List[bytes]]:
+    """parse_fixed_meta with the item size derived from the header count, so
+    files of any Project vintage parse (M365 uses 96/51/10-byte Fixed2Meta
+    items where 2010-era files use 92/50/9). Falls back to default_size when
+    the stream length is not an exact multiple (trailing slack)."""
+    count = struct.unpack_from("<I", data, 8)[0]
+    size = default_size
+    if count and (len(data) - 16) % count == 0:
+        size = (len(data) - 16) // count
+    return parse_fixed_meta(data, size)
+
+
 def build_fixed_meta(header: bytes, items: List[bytes], data_len: Optional[int] = None) -> bytes:
     hdr = bytearray(header)
     struct.pack_into("<I", hdr, 8, len(items))

@@ -136,9 +136,9 @@ def test_writer_end_to_end_with_template(tmp_path):
     w.write(p, str(out))
     ole = olefile.OleFileIO(str(out))
     r = lambda s: ole.openstream("   114/TBkndTask/" + s).read()
-    mh, mc, mitems = B.parse_fixed_meta(r("FixedMeta"), 47)
+    mh, mc, mitems = B.parse_fixed_meta_auto(r("FixedMeta"), 47)
     recs = B.split_fixed_data(r("FixedData"), mitems)
-    m2h, m2c, m2items = B.parse_fixed_meta(r("Fixed2Meta"), 92)
+    m2h, m2c, m2items = B.parse_fixed_meta_auto(r("Fixed2Meta"), 92)
     assert struct.unpack_from("<I", r("FixedMeta"), 12)[0] == len(r("FixedData"))
     units_it = w.task_fm[NATIVE["ACTUAL_DURATION_UNITS"]]
     dur_it = w.task_fm[NATIVE["DURATION"]]
@@ -185,7 +185,7 @@ def test_writer_resources_and_assignments(tmp_path):
 
     # resources: stubs + uid0 + 2 new records, counters match
     _, props, _ = B.parse_props(r("Props"))
-    mh, mc, mitems = B.parse_fixed_meta(r("TBkndRsc/FixedMeta"), RSC_META_SIZE)
+    mh, mc, mitems = B.parse_fixed_meta_auto(r("TBkndRsc/FixedMeta"), RSC_META_SIZE)
     recs = B.split_fixed_data(r("TBkndRsc/FixedData"), mitems)
     full = {struct.unpack_from("<I", rec, 0)[0]: rec for rec in recs if len(rec) > 100}
     assert set(full) == {0, 1, 2}
@@ -199,7 +199,7 @@ def test_writer_resources_and_assignments(tmp_path):
     assert RSC_NATIVE["INITIALS"] not in vtable[2]
 
     # per-resource calendars appended, pointing at the resource
-    cmh, cmc, cmitems = B.parse_fixed_meta(r("TBkndCal/FixedMeta"), 10)
+    cmh, cmc, cmitems = B.parse_fixed_meta_auto(r("TBkndCal/FixedMeta"), 10)
     crecs = B.split_fixed_data(r("TBkndCal/FixedData"), cmitems)
     uc, bc, rc = w.cal_cols
     rsc_cals = {struct.unpack("<3i", rec)[rc]: struct.unpack("<3i", rec)
@@ -208,7 +208,7 @@ def test_writer_resources_and_assignments(tmp_path):
     assert rsc_cals[1][bc] == w.cal_standard_uid
 
     # assignments: 2 records with GUID cross-references and scaled units/work
-    amh, amc, amitems = B.parse_fixed_meta(r("TBkndAssn/FixedMeta"), ASSN_META_SIZE)
+    amh, amc, amitems = B.parse_fixed_meta_auto(r("TBkndAssn/FixedMeta"), ASSN_META_SIZE)
     arecs = B.split_fixed_data(r("TBkndAssn/FixedData"), amitems)
     assert len(arecs) == 2 and struct.unpack("<I", props[B.PROPS_ASSN_RECORD_COUNT])[0] == 2
     task_it = w.assn_fm[ASSN_NATIVE["TASK_UNIQUE_ID"]]
@@ -221,7 +221,7 @@ def test_writer_resources_and_assignments(tmp_path):
     assert struct.unpack_from("<d", arecs[1], work_it.offset)[0] == 4800 * 100.0 * 0.5
     am2d = r("TBkndAssn/Fixed2Meta")
     am2n = struct.unpack_from("<I", am2d, 8)[0]
-    am2items = B.parse_fixed_meta(am2d, (len(am2d) - 16) // am2n)[2]
+    am2items = B.parse_fixed_meta_auto(am2d, 53)[2]
     arecs2 = B.split_fixed_data(r("TBkndAssn/Fixed2Data"), am2items)
     tg = w.assn_fm[ASSN_NATIVE["TASK_GUID"]]
     rg = w.assn_fm[ASSN_NATIVE["RESOURCE_GUID"]]
@@ -239,7 +239,7 @@ def test_writer_resources_and_assignments(tmp_path):
     work_it = w.task_fm[2]  # ACTUAL_WORK id 2 is at +134; WORK id 0 at +126
     work_off = w.task_fm[0].offset
     trecs = B.split_fixed_data(r("TBkndTask/FixedData"),
-                               B.parse_fixed_meta(r("TBkndTask/FixedMeta"), 47)[2])
+                               B.parse_fixed_meta_auto(r("TBkndTask/FixedMeta"), 47)[2])
     tw = {struct.unpack_from("<I", rec, 0)[0]: struct.unpack_from("<d", rec, work_off)[0]
           for rec in trecs if len(rec) > 100}
     assert tw[1] == 9600 * 100.0                  # 2 days at 100%
@@ -274,7 +274,7 @@ def test_writer_calendars(tmp_path):
     nights_uid = max(uid for uid in vt if CAL_NAME_VAR in vt[uid])
     assert B.decode_unicode(B.read_var(vd, vt[nights_uid][CAL_NAME_VAR])) == "Nights"
     assert CAL_DATA_VAR in vt[nights_uid]
-    cmh, cmc, cmitems = B.parse_fixed_meta(r("TBkndCal/FixedMeta"), 10)
+    cmh, cmc, cmitems = B.parse_fixed_meta_auto(r("TBkndCal/FixedMeta"), 10)
     crecs = B.split_fixed_data(r("TBkndCal/FixedData"), cmitems)
     uc = w.cal_uid_col
     rows = {struct.unpack("<3i", rec)[uc]: struct.unpack("<3i", rec) for rec in crecs if len(rec) == 12}
@@ -282,13 +282,13 @@ def test_writer_calendars(tmp_path):
     assert [v for j, v in enumerate(rows[nights_uid]) if j != uc] == [-1, -1]
     assert struct.unpack_from("<I", r("TBkndCal/FixedMeta"), 12)[0] == len(r("TBkndCal/FixedData"))
     # task B references Nights
-    mh, mc, mitems = B.parse_fixed_meta(r("TBkndTask/FixedMeta"), 47)
+    mh, mc, mitems = B.parse_fixed_meta_auto(r("TBkndTask/FixedMeta"), 47)
     recs = B.split_fixed_data(r("TBkndTask/FixedData"), mitems)
     cal_it = w.task_fm[NATIVE["CALENDAR_UNIQUE_ID"]]
     for i, rec in enumerate(recs):
         if len(rec) > 100 and struct.unpack_from("<I", rec, 0)[0] == 2:
             assert struct.unpack_from("<i", rec, cal_it.offset)[0] == nights_uid
-            m2h, _, m2items = B.parse_fixed_meta(r("TBkndTask/Fixed2Meta"), 92)
+            m2h, _, m2items = B.parse_fixed_meta_auto(r("TBkndTask/Fixed2Meta"), 92)
             assert B.meta_bit(mitems[i], m2items[i], w.task_bit[NATIVE["CALENDAR_UNIQUE_ID"]]) == 1
     # summary rollup honours the custom week: Mon full + Tue full = 9600,
     # but Wed-half means task A staying 2 declared days is unaffected;

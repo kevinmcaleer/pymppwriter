@@ -234,11 +234,14 @@ class MppWriter:
         if idx is not None:
             B.set_meta_bit(meta, meta2, idx, value)
 
+    def _meta(self, path: str, default_size: int):
+        return B.parse_fixed_meta_auto(self._get(path), default_size)
+
     def _load_prototypes(self) -> None:
         t = f"{PRJ}/TBkndTask"
-        mh, _, mitems = B.parse_fixed_meta(self._get(f"{t}/FixedMeta"), TASK_META_SIZE)
+        mh, _, mitems = self._meta(f"{t}/FixedMeta", TASK_META_SIZE)
         recs = B.split_fixed_data(self._get(f"{t}/FixedData"), mitems)
-        m2h, _, m2items = B.parse_fixed_meta(self._get(f"{t}/Fixed2Meta"), TASK_META2_SIZE)
+        m2h, _, m2items = self._meta(f"{t}/Fixed2Meta", TASK_META2_SIZE)
         recs2 = B.split_fixed_data(self._get(f"{t}/Fixed2Data"), m2items)
         vh, vtable, _ = B.parse_var_meta(self._get(f"{t}/VarMeta"))
         vdata = self._get(f"{t}/Var2Data")
@@ -258,9 +261,9 @@ class MppWriter:
         self.stubs = [(recs[i], recs2[i], mitems[i], m2items[i]) for i in range(len(recs)) if len(recs[i]) <= 16]
         # relations
         c = f"{PRJ}/TBkndCons"
-        rmh, _, rmitems = B.parse_fixed_meta(self._get(f"{c}/FixedMeta"), REL_META_SIZE)
+        rmh, _, rmitems = self._meta(f"{c}/FixedMeta", REL_META_SIZE)
         rrecs = B.split_fixed_data(self._get(f"{c}/FixedData"), rmitems)
-        rm2h, _, rm2items = B.parse_fixed_meta(self._get(f"{c}/Fixed2Meta"), REL_META2_SIZE)
+        rm2h, _, rm2items = self._meta(f"{c}/Fixed2Meta", REL_META2_SIZE)
         rrecs2 = B.split_fixed_data(self._get(f"{c}/Fixed2Data"), rm2items)
         self.rel_meta_hdr, self.rel_meta2_hdr = rmh, rm2h
         self.rel_proto = None
@@ -271,13 +274,9 @@ class MppWriter:
         # task durations when joined by task UID — but the first one is the
         # prototype for real assignments
         a = f"{PRJ}/TBkndAssn"
-        amd = self._get(f"{a}/FixedMeta")
-        amh, _, amitems = B.parse_fixed_meta(amd, ASSN_META_SIZE)
+        amh, _, amitems = self._meta(f"{a}/FixedMeta", ASSN_META_SIZE)
         arecs = B.split_fixed_data(self._get(f"{a}/FixedData"), amitems)
-        am2d = self._get(f"{a}/Fixed2Meta")
-        am2n = struct.unpack_from("<I", am2d, 8)[0]
-        am2size = (len(am2d) - 16) // am2n if am2n else 0
-        am2h, _, am2items = B.parse_fixed_meta(am2d, am2size) if am2n else (am2d[:16], 0, [])
+        am2h, _, am2items = self._meta(f"{a}/Fixed2Meta", 53)
         arecs2 = B.split_fixed_data(self._get(f"{a}/Fixed2Data"), am2items)
         avh, avtable, _ = B.parse_var_meta(self._get(f"{a}/VarMeta"))
         avdata = self._get(f"{a}/Var2Data")
@@ -292,12 +291,9 @@ class MppWriter:
         # resources: the uid-0 "Unassigned" system record (present even in a blank
         # project) is the prototype for real resource records
         rs = f"{PRJ}/TBkndRsc"
-        rsmh, _, rsmitems = B.parse_fixed_meta(self._get(f"{rs}/FixedMeta"), RSC_META_SIZE)
+        rsmh, _, rsmitems = self._meta(f"{rs}/FixedMeta", RSC_META_SIZE)
         rsrecs = B.split_fixed_data(self._get(f"{rs}/FixedData"), rsmitems)
-        rsm2d = self._get(f"{rs}/Fixed2Meta")
-        rsm2n = struct.unpack_from("<I", rsm2d, 8)[0]
-        rsm2size = (len(rsm2d) - 16) // rsm2n if rsm2n else 0
-        rsm2h, _, rsm2items = B.parse_fixed_meta(rsm2d, rsm2size) if rsm2n else (rsm2d[:16], 0, [])
+        rsm2h, _, rsm2items = self._meta(f"{rs}/Fixed2Meta", 50)
         rsrecs2 = B.split_fixed_data(self._get(f"{rs}/Fixed2Data"), rsm2items)
         rsvh, rsvtable, _ = B.parse_var_meta(self._get(f"{rs}/VarMeta"))
         rsvdata = self._get(f"{rs}/Var2Data")
@@ -318,12 +314,9 @@ class MppWriter:
         # (calendar uid, base calendar uid, resource uid) in an order that varies by
         # Project version, so detect the columns from the template's own records.
         cl = f"{PRJ}/TBkndCal"
-        clmh, _, clmitems = B.parse_fixed_meta(self._get(f"{cl}/FixedMeta"), CAL_META_SIZE)
+        clmh, _, clmitems = self._meta(f"{cl}/FixedMeta", CAL_META_SIZE)
         clrecs = B.split_fixed_data(self._get(f"{cl}/FixedData"), clmitems)
-        clm2d = self._get(f"{cl}/Fixed2Meta")
-        clm2n = struct.unpack_from("<I", clm2d, 8)[0]
-        clm2size = (len(clm2d) - 16) // clm2n if clm2n else 0
-        clm2h, _, clm2items = B.parse_fixed_meta(clm2d, clm2size) if clm2n else (clm2d[:16], 0, [])
+        clm2h, _, clm2items = self._meta(f"{cl}/Fixed2Meta", 9)
         clrecs2 = B.split_fixed_data(self._get(f"{cl}/Fixed2Data"), clm2items)
         self.cal_meta_hdr, self.cal_meta2_hdr = clmh[:16], clm2h[:16]
         clvraw = self._get(f"{cl}/VarMeta")
