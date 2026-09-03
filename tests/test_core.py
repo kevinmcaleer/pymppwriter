@@ -85,7 +85,7 @@ def test_build_calendar_data_blob():
     assert struct.unpack_from("<I", b, 4)[0] == 4800             # total tenths
     assert struct.unpack_from("<HH", b, 8) == (4800, 7800)
     assert struct.unpack_from("<II", b, 20) == (2400, 2400)
-    assert struct.unpack_from("<II", b, 40) == (2400, 2400)      # duplicated durations
+    assert struct.unpack_from("<II", b, 40) == (2400, 4800)      # cumulative durations
     assert struct.unpack_from("<H", blob, 60)[0] == 1            # default day
     assert struct.unpack_from("<I", blob, 420)[0] == 2
     day = (date(2026, 9, 21) - date(1983, 12, 31)).days

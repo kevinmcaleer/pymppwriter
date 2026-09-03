@@ -734,6 +734,15 @@ class MppWriter:
             if key in self.props:
                 self.props[key] = struct.pack("<I", n)
 
+        # per-storage Var2Data lengths: Project truncates its var-data read at
+        # the declared size, so stale values hide names and calendar data
+        for storage, key in B.PROPS_VAR2DATA_SIZE.items():
+            if key in self.props:
+                try:
+                    self.props[key] = struct.pack("<I", len(self._get(f"{PRJ}/{storage}/Var2Data")))
+                except KeyError:
+                    pass
+
         # project properties: start date + title + default calendar
         if project.default_calendar is not None:
             if project.default_calendar not in named_cal_uid:
