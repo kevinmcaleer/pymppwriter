@@ -77,22 +77,27 @@ def test_build_calendar_data_blob():
     days[0] = (B.CAL_DAY_NONWORKING, ())
     blob = B.build_calendar_data(days, [(date(2026, 9, 21), date(2026, 9, 21), "Hol"),
                                         (date(2026, 10, 1), date(2026, 10, 2), "Golf")])
-    # "Hol\0" = 8 bytes (4-aligned, no pad); "Golf\0" = 10 bytes (+2 pad)
-    assert len(blob) == 420 + 4 + 92 + 8 + 92 + 10 + 2
-    assert struct.unpack_from("<H", blob, 0)[0] == B.CAL_DAY_NONWORKING
+    # "Hol\0" = 8 bytes (aligned, no pad); "Golf\0" = 10 bytes (+2 pad) + 4 closing
+    assert len(blob) == 420 + 4 + 92 + 8 + 92 + 10 + 2 + 4
+    assert struct.unpack_from("<HH", blob, 0) == (0, 0)          # explicit non-working
     b = blob[4 * 60:]
-    assert struct.unpack_from("<HH", b, 0) == (B.CAL_DAY_WORKING, 2)
+    assert struct.unpack_from("<HH", b, 0) == (0, 2)             # working = wire type 0
+    assert struct.unpack_from("<I", b, 4)[0] == 4800             # total tenths
     assert struct.unpack_from("<HH", b, 8) == (4800, 7800)
     assert struct.unpack_from("<II", b, 20) == (2400, 2400)
+    assert struct.unpack_from("<II", b, 40) == (2400, 2400)      # duplicated durations
+    assert struct.unpack_from("<H", blob, 60)[0] == 1            # default day
     assert struct.unpack_from("<I", blob, 420)[0] == 2
     day = (date(2026, 9, 21) - date(1983, 12, 31)).days
     assert struct.unpack_from("<HHH", blob, 424) == (day, day, 1)
+    assert struct.unpack_from("<III", blob, 424 + 72) == (1, 0, 1)
+    assert struct.unpack_from("<I", blob, 424 + 84)[0] == 0x4000
     assert struct.unpack_from("<I", blob, 424 + 88)[0] == 8      # "Hol\0" utf-16
     assert blob[424 + 92:424 + 100] == "Hol\0".encode("utf-16-le")
     rec2_off = 424 + 92 + 8
     d1 = (date(2026, 10, 1) - date(1983, 12, 31)).days
     assert struct.unpack_from("<HHH", blob, rec2_off) == (d1, d1 + 1, 2)
-    assert blob[-2:] == b"\0\0"                                   # pad after "Golf\0"
+    assert blob[-6:] == b"\0" * 6                                 # pad + closing bytes
 
 
 def test_meta_bitmap_set_and_get_across_blocks():
@@ -265,7 +270,7 @@ def test_writer_calendars(tmp_path):
     std_uid = w.cal_standard_uid
     assert CAL_DATA_VAR in vt[std_uid]
     blob = B.read_var(vd, vt[std_uid][CAL_DATA_VAR])
-    assert struct.unpack_from("<H", blob, 3 * 60)[0] == B.CAL_DAY_WORKING  # Wed = Sunday-first block 3
+    assert struct.unpack_from("<HH", blob, 3 * 60) == (0, 1)  # Wed = Sunday-first block 3, working 1 range
     nights_uid = max(uid for uid in vt if CAL_NAME_VAR in vt[uid])
     assert B.decode_unicode(B.read_var(vd, vt[nights_uid][CAL_NAME_VAR])) == "Nights"
     assert CAL_DATA_VAR in vt[nights_uid]

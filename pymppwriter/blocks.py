@@ -200,54 +200,60 @@ def build_var_blocks(header: bytes, values: List[Tuple[int, int, bytes]], field_
 
 # ------------------------------------------------------ calendar data ------
 CAL_DAY_NONWORKING, CAL_DAY_DEFAULT, CAL_DAY_WORKING = 0, 1, 2
-# recurrence dwords for a plain date-range exception, byte-copied from a
-# Project-written file (zeroes make the reader reject the exception)
-_EXC_RECUR_1, _EXC_RECUR_2 = 0x238CF1F7, 0xC4DB7B9F
 
 
 def build_calendar_data(days, exceptions=()) -> bytes:
-    """Calendar definition blob (var-data key 8 on a TBkndCal record).
+    """Calendar definition blob (var-data key 8 on a TBkndCal record), in the
+    dialect Microsoft Project M365 writes (an earlier form using day type 2
+    for working days is readable by MPXJ but ignored by Project).
 
     days: 7 (day_type, ranges) tuples, SUNDAY first; ranges are
     (start_minute, end_minute) pairs from midnight, at most 5 per day and only
     meaningful for CAL_DAY_WORKING.
     exceptions: (from_date, to_date, name) tuples of non-working days, sorted.
 
-    Each 60-byte day block: uint16 day type, uint16 range count, range start
-    times as uint16 tenths-of-a-minute at +8 (stride 2), range durations as
-    uint32 tenths at +20 (stride 4). Exceptions: uint32 count, then per
+    Each 60-byte day block: uint16 day type on the wire (1 = default,
+    0 = explicit; working vs non-working is the range count), uint16 range
+    count, uint32 total working tenths-of-a-minute at +4, range start times as
+    uint16 tenths at +8 (stride 2), range durations as uint32 tenths at +20
+    (stride 4) and duplicated at +40. Exceptions: uint32 count, then per
     exception a 92-byte record (uint16 from-day, uint16 to-day, uint16 day
-    count, recurrence data at +72, uint32 name byte length at +88) followed by
-    the UTF-16 name and 2 bytes of padding.
+    count, recurrence dwords 1, 0, 1, 0x4000 at +72, uint32 name byte length
+    at +88) followed by the UTF-16 name, zero-padded to a 4-byte boundary plus
+    4 more zero bytes (both as observed in Project-written files).
     """
     if len(days) != 7:
         raise ValueError("days must have exactly 7 entries, Sunday first")
     out = bytearray()
     for dtype, ranges in days:
         b = bytearray(60)
-        struct.pack_into("<H", b, 0, dtype)
+        struct.pack_into("<H", b, 0, 1 if dtype == CAL_DAY_DEFAULT else 0)
         if dtype == CAL_DAY_WORKING:
             ranges = list(ranges)[:5]
             struct.pack_into("<H", b, 2, len(ranges))
+            struct.pack_into("<I", b, 4, sum(end - start for start, end in ranges) * 10)
             for i, (start, end) in enumerate(ranges):
                 struct.pack_into("<H", b, 8 + 2 * i, start * 10)
                 struct.pack_into("<I", b, 20 + 4 * i, (end - start) * 10)
+                struct.pack_into("<I", b, 40 + 4 * i, (end - start) * 10)
         out += b
     if exceptions:
         out += struct.pack("<I", len(exceptions))
-        for from_date, to_date, name in exceptions:
+        for i, (from_date, to_date, name) in enumerate(exceptions):
             rec = bytearray(92)
             d1 = (from_date - EPOCH.date()).days
             d2 = (to_date - EPOCH.date()).days
             struct.pack_into("<HH", rec, 0, d1, d2)
             struct.pack_into("<H", rec, 4, d2 - d1 + 1)
             struct.pack_into("<I", rec, 72, 1)
-            struct.pack_into("<I", rec, 76, _EXC_RECUR_1)
             struct.pack_into("<I", rec, 80, 1)
-            struct.pack_into("<I", rec, 84, _EXC_RECUR_2)
+            struct.pack_into("<I", rec, 84, 0x4000)
             nb = (name + "\0").encode("utf-16-le")
             struct.pack_into("<I", rec, 88, len(nb))
-            out += rec + nb + b"\0" * ((-len(nb)) % 4)   # next record 4-byte aligned
+            # next record 4-byte aligned; 4 extra zero bytes close the blob
+            out += rec + nb + b"\0" * ((-len(nb)) % 4)
+            if i == len(exceptions) - 1:
+                out += b"\0\0\0\0"
     return bytes(out)
 
 
