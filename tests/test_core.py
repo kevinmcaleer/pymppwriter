@@ -20,6 +20,40 @@ def test_cfb_roundtrip_small_and_large_streams(tmp_path):
     assert ole.get_type("dir/emptydir") == olefile.STGTY_STORAGE
 
 
+def test_cfb_difat_large_file(tmp_path):
+    # ~9 MB payload forces > 109 FAT sectors, engaging DIFAT sector chains
+    big = (b"0123456789abcdef" * 64) * 9000       # 9,216,000 bytes
+    root = Storage()
+    root.set_path("big", big)
+    root.set_path("dir/small", b"mini stream data")
+    out = tmp_path / "big.cfb"
+    out.write_bytes(write_cfb(root))
+    ole = olefile.OleFileIO(str(out))
+    assert ole.openstream("big").read() == big
+    assert ole.openstream("dir/small").read() == b"mini stream data"
+
+
+def test_validator_rejects_bad_structures():
+    from datetime import datetime as D
+    from pymppwriter.writer import validate, Project, Task, Relation
+    ok = lambda **kw: Task(kw.pop("uid"), "t", D(2026, 1, 5, 8), D(2026, 1, 5, 17), **kw)
+    validate(Project("p", D(2026, 1, 5), [ok(uid=1), ok(uid=2, outline_level=2, parent_uid=1)],
+                     [Relation(1, 2)]))
+    with pytest.raises(ValueError, match="duplicate"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1), ok(uid=1)]))
+    with pytest.raises(ValueError, match="does not follow"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1), ok(uid=2, outline_level=3, parent_uid=1)]))
+    with pytest.raises(ValueError, match="does not match the"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1), ok(uid=2), ok(uid=3, outline_level=2, parent_uid=1)]))
+    with pytest.raises(ValueError, match="unknown task"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1)], [Relation(1, 9)]))
+    with pytest.raises(ValueError, match="itself"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1)], [Relation(1, 1)]))
+    with pytest.raises(ValueError, match="cycle"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1), ok(uid=2), ok(uid=3)],
+                         [Relation(1, 2), Relation(2, 3), Relation(3, 1)]))
+
+
 def test_cfb_name_ordering_uses_length_then_upper():
     assert _name_key("b") < _name_key("AA")
     assert _name_key("abc") == _name_key("ABC")
@@ -179,6 +213,20 @@ def test_writer_task_fields(tmp_path):
     assert B.decode_timestamp(B.read_var(vd, vt[1][DATE_IDS[0]]), 0) == D(2026, 12, 25, 8)
     assert bit(1, FLAG_IDS[2]) == 1 and bit(2, FLAG_IDS[2]) == 0
     assert NATIVE["NOTES"] not in vt[2]
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_retargets_view_scroll(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task
+    w = MppWriter("templates/template.mpp")
+    old = w.template_start
+    p = Project("t", D(2027, 2, 1, 8), [Task(1, "A", D(2027, 2, 1, 8), D(2027, 2, 1, 17))])
+    out = tmp_path / "o.mpp"
+    MppWriter("templates/template.mpp").write(p, str(out))
+    vd = olefile.OleFileIO(str(out)).openstream("   214/CV_iew/Var2Data").read()
+    assert B.encode_timestamp(D(2027, 2, 1, 8)) in vd
+    assert old not in vd
 
 
 @pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")

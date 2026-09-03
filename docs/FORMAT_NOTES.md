@@ -215,6 +215,24 @@ creating and saving application versions ("16,0,20326,20112" = M365; "14,0,4751,
 2010), the username and the original file title. Kept verbatim from the template — it is what
 declares the file's era, which several structures' dialects key off.
 
+## Round-trip fidelity
+Two engine behaviours matter when Project recalculates an opened file:
+* an auto-scheduled ASAP task with no predecessor snaps back to its earliest date, so the writer pins
+  any declared start later than the project start with a Start-No-Earlier-Than constraint — the same
+  thing Project does when a user types a start date;
+* the unmapped relation-record trailer moved between eras: 2010 files use `type@12, lagUnits@14,
+  lag@16`, M365 files `type@12, lag@14, lagUnits@18` (writing the 2010 shape into an M365 file put
+  the units code 7 into the lag field = 42-second successor slips). The era is detected from the
+  relation field map (native id 9 at offset 0 = 2010).
+`scripts/roundtrip_check.py` compares a generated file against a Project-resaved copy through MPXJ
+(tasks, resources, assignments; rows added in Project are allowed) — both findings above came out of
+its first run. The Gantt scroll position is a timestamp inside `214/CV_iew/Var2Data` equal to the
+template's project start; the writer retargets it to the new start so files open on the schedule.
+Templates of different Project vintages are handled by deriving meta item sizes from stream headers,
+reading every layout from the file's own field maps, and era-detecting the calendar record columns,
+calendar flag bits and the relation trailer; 2010-era and current M365 templates are round-trip
+tested, and 2013-2021 files share the same MPP14 structures between those two points.
+
 ## Not yet handled
 Resource rates/costs and material resources, assignment actual work / percent complete, calendar
 working-week edits and exceptions, notes, custom fields, SummaryInformation title (MPXJ reads the title

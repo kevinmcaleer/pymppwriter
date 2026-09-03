@@ -248,6 +248,61 @@ class Project:
     currency_code: Optional[str] = None       # e.g. "GBP"
 
 
+def validate(project: Project) -> None:
+    """Reject structurally invalid projects before Project ever sees them:
+    duplicate/invalid uids, broken parent references, outline levels that
+    do not form a valid row-order outline, and dependency cycles."""
+    seen = set()
+    for t in project.tasks:
+        if t.uid <= 0:
+            raise ValueError(f"task uid must be > 0 (got {t.uid})")
+        if t.uid in seen:
+            raise ValueError(f"duplicate task uid {t.uid}")
+        seen.add(t.uid)
+        if t.finish < t.start:
+            raise ValueError(f"task {t.uid}: finish before start")
+    # row-order outline: level may rise by at most 1, and the parent must be
+    # the nearest preceding task one level up (level 1 tasks have parent 0)
+    stack: List[Task] = []
+    for t in project.tasks:
+        if t.outline_level < 1:
+            raise ValueError(f"task {t.uid}: outline_level must be >= 1")
+        while stack and stack[-1].outline_level >= t.outline_level:
+            stack.pop()
+        expected_parent = stack[-1].uid if t.outline_level > 1 else 0
+        if t.outline_level > 1 and (not stack or stack[-1].outline_level != t.outline_level - 1):
+            raise ValueError(f"task {t.uid}: outline_level {t.outline_level} does not follow "
+                             f"a level {t.outline_level - 1} task")
+        if t.parent_uid != expected_parent:
+            raise ValueError(f"task {t.uid}: parent_uid {t.parent_uid} does not match the "
+                             f"outline (expected {expected_parent})")
+        stack.append(t)
+    # relations: endpoints exist, no self-links, no cycles
+    succs: Dict[int, List[int]] = {}
+    for rel in project.relations:
+        for end in (rel.pred_uid, rel.succ_uid):
+            if end not in seen:
+                raise ValueError(f"relation references unknown task uid {end}")
+        if rel.pred_uid == rel.succ_uid:
+            raise ValueError(f"task {rel.pred_uid} cannot depend on itself")
+        succs.setdefault(rel.pred_uid, []).append(rel.succ_uid)
+    state: Dict[int, int] = {}    # 0/absent=new, 1=in progress, 2=done
+
+    def visit(uid: int, trail: List[int]) -> None:
+        state[uid] = 1
+        for nxt in succs.get(uid, []):
+            if state.get(nxt) == 1:
+                cycle = trail[trail.index(nxt):] + [nxt] if nxt in trail else [uid, nxt]
+                raise ValueError(f"dependency cycle: {' -> '.join(map(str, cycle))}")
+            if state.get(nxt, 0) == 0:
+                visit(nxt, trail + [nxt])
+        state[uid] = 2
+
+    for uid in list(succs):
+        if state.get(uid, 0) == 0:
+            visit(uid, [uid])
+
+
 class MppWriter:
     def __init__(self, template_path: str):
         self.root = load_cfb(template_path)
@@ -257,6 +312,12 @@ class MppWriter:
         self.task_fm, self.task_bit = self._parse_class_map(B.PROPS_TASK_FIELD_MAP)
         self.rsc_fm, self.rsc_bit = self._parse_class_map(B.PROPS_RESOURCE_FIELD_MAP)
         self.assn_fm, self.assn_bit = self._parse_class_map(B.PROPS_ASSIGNMENT_FIELD_MAP)
+        self.template_start = self.props.get(B.PROPS_PROJECT_START_DATE, b"")
+        rel_fm, _ = self._parse_class_map(B.PROPS_RELATION_FIELD_MAP)
+        # the unmapped relation trailer moved between eras: 2010 files (native
+        # id 9 at offset 0) use type@12, lagUnits@14, lag@16; M365 files use
+        # type@12, lag@14, lagUnits@18 (verified against Project-written files)
+        self.rel_2010_layout = rel_fm.get(9) is not None and rel_fm[9].offset == 0
         self._load_prototypes()
 
     # ------------------------------------------------------------ helpers --
@@ -468,6 +529,7 @@ class MppWriter:
 
     # ------------------------------------------------------------- build ---
     def build(self, project: Project) -> bytes:
+        validate(project)
         by_uid: Dict[int, Task] = {t.uid: t for t in project.tasks}
         children: Dict[int, List[Task]] = {}
         for t in project.tasks:
@@ -635,9 +697,16 @@ class MppWriter:
                 self._put(rec, "CALENDAR_UNIQUE_ID", "<i", cal_uid)
                 self._put_bit(m, m2, "CALENDAR_UNIQUE_ID", True)
             if task is not None:
-                if task.constraint is not None:
-                    self._put(rec, "CONSTRAINT_TYPE", "<H", CONSTRAINT_TYPES[task.constraint])
-                    self._put_ts(rec, "CONSTRAINT_DATE", task.constraint_date)
+                constraint, cdate = task.constraint, task.constraint_date
+                if (constraint is None and not manual and not is_summary
+                        and start > project.start):
+                    # hold the declared start against the scheduling engine, the
+                    # way Project itself pins a typed-in start date (otherwise an
+                    # ASAP task snaps back to its earliest date on recalculation)
+                    constraint, cdate = "SNET", start
+                if constraint is not None:
+                    self._put(rec, "CONSTRAINT_TYPE", "<H", CONSTRAINT_TYPES[constraint])
+                    self._put_ts(rec, "CONSTRAINT_DATE", cdate)
                     self._put_bit(m, m2, "CONSTRAINT_TYPE", True)
                 if task.deadline is not None:
                     self._put_ts(rec, "DEADLINE", task.deadline)
@@ -736,8 +805,12 @@ class MppWriter:
         for i, r in enumerate(project.relations, start=1):
             rec = bytearray(self.rel_proto["rec"]); rec2 = bytearray(self.rel_proto["rec2"])
             struct.pack_into("<III", rec, 0, i, r.pred_uid, r.succ_uid)
-            struct.pack_into("<HH", rec, 12, REL_TYPES[r.type], 7)  # lag units: days
-            struct.pack_into("<i", rec, 16, int(round(r.lag_days * TENTHS_PER_DAY)))
+            struct.pack_into("<H", rec, 12, REL_TYPES[r.type])
+            lag = int(round(r.lag_days * TENTHS_PER_DAY))
+            if self.rel_2010_layout:
+                struct.pack_into("<Hi", rec, 14, 7, lag)        # lag units (days), lag
+            else:
+                struct.pack_into("<iH", rec, 14, lag, 7)        # lag, lag units (days)
             rec2[0:16] = uuid.uuid4().bytes_le
             rec2[16:32] = by_uid[r.pred_uid].guid
             rec2[32:48] = by_uid[r.succ_uid].guid
@@ -950,6 +1023,19 @@ class MppWriter:
         if B.PROPS_TITLE in self.props:
             self.props[B.PROPS_TITLE] = project.title.encode("utf-16-le") + b"\0" * 4   # Props strings: double NUL
         self._set(f"{PRJ}/Props", B.build_props(self.props_hdr, self.props, self.props_order))
+
+        # Gantt scroll position: the view state (CV_iew) stores the visible date
+        # as a timestamp equal to the template's project start — retarget it so
+        # the chart opens on this schedule instead of the template's save date
+        new_start = B.encode_timestamp(project.start)
+        if len(self.template_start) == 4 and self.template_start != new_start:
+            try:
+                vd = self._get("   214/CV_iew/Var2Data")
+                if self.template_start in vd:
+                    self._set("   214/CV_iew/Var2Data",
+                              vd.replace(self.template_start, new_start))
+            except KeyError:
+                pass
 
         # document metadata: SummaryInformation (title, subject, author, keywords,
         # comments) + DocumentSummaryInformation (manager, company, category)
