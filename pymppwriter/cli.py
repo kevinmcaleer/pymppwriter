@@ -72,7 +72,14 @@ def load_project(path: str) -> Project:
     cal = _calendar(spec["calendar"]) if "calendar" in spec else None
     cals = [_calendar(c, c["name"]) for c in spec.get("calendars", [])]
     return Project(spec["title"], _dt(spec["start"]), tasks, rels, rscs, assns,
-                   calendar=cal, calendars=cals, default_calendar=spec.get("default_calendar"))
+                   calendar=cal, calendars=cals, default_calendar=spec.get("default_calendar"),
+                   author=spec.get("author"), subject=spec.get("subject"),
+                   keywords=spec.get("keywords"), comments=spec.get("comments"),
+                   manager=spec.get("manager"), company=spec.get("company"),
+                   category=spec.get("category"),
+                   status_date=_dt(spec["status_date"]) if "status_date" in spec else None,
+                   currency_symbol=spec.get("currency_symbol"),
+                   currency_code=spec.get("currency_code"))
 
 
 def main(argv=None) -> int:

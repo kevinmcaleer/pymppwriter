@@ -199,6 +199,22 @@ The "every task shows 1 day?" defect had three causes, found by A/B tests in Pro
 3. The units word / estimated flag and the boolean meta-bitmap bits (milestone/summary/estimated) had to be
    written per task — Project honours them exactly as described above.
 
+## Project properties and document metadata
+Props stream keys: 0x2400002 project start, **0x2400003 project finish**, 0x2400006 creation date,
+0x2400007 last-saved date, **0x2400045 status date** (0xFFFFFFFF = NA; located by fuzzing every NA
+key with distinct timestamps and reading the result back), 0x2400010 currency symbol and 0x24013BB
+currency code (UTF-16 short strings), 37748750 default calendar name.
+**0x24000AE (2010-era only)** holds legacy next-unique-id counters; stale values make Project
+renumber task uids on open (observed: uid 10 → 7), and M365 deletes the key on save — so the writer
+drops it. M365 files carry no next-uid counters at all: Project derives them from the loaded records.
+Document metadata lives in the root `\x05SummaryInformation` property set (MS-OLEPS, VT_LPSTR
+cp1252): pid 2 title, 3 subject, 4 author, 5 keywords, 6 comments, 8 last author, 12/13 created/saved
+FILETIMEs — and `\x05DocumentSummaryInformation` section 0: pid 14 manager, 15 company, 2 category.
+`Props14` (root stream) is the provenance/version block: length-prefixed UTF-16 entries with the
+creating and saving application versions ("16,0,20326,20112" = M365; "14,0,4751,1000" = Project
+2010), the username and the original file title. Kept verbatim from the template — it is what
+declares the file's era, which several structures' dialects key off.
+
 ## Not yet handled
 Resource rates/costs and material resources, assignment actual work / percent complete, calendar
 working-week edits and exceptions, notes, custom fields, SummaryInformation title (MPXJ reads the title
