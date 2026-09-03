@@ -236,6 +236,16 @@ class Project:
     calendar: Optional[Calendar] = None       # edits applied to the Standard calendar
     calendars: List[Calendar] = field(default_factory=list)   # extra base calendars
     default_calendar: Optional[str] = None    # project calendar name; default Standard
+    author: Optional[str] = None              # document metadata (SummaryInformation)
+    subject: Optional[str] = None
+    keywords: Optional[str] = None
+    comments: Optional[str] = None
+    manager: Optional[str] = None             # DocumentSummaryInformation
+    company: Optional[str] = None
+    category: Optional[str] = None
+    status_date: Optional[datetime] = None
+    currency_symbol: Optional[str] = None     # e.g. "£"; default template's ("$")
+    currency_code: Optional[str] = None       # e.g. "GBP"
 
 
 class MppWriter:
@@ -914,7 +924,7 @@ class MppWriter:
                 except KeyError:
                     pass
 
-        # project properties: start date + title + default calendar
+        # project properties: dates, title, default calendar, currency
         if project.default_calendar is not None:
             if project.default_calendar not in named_cal_uid:
                 raise ValueError(f"unknown default calendar {project.default_calendar!r}")
@@ -922,9 +932,47 @@ class MppWriter:
                 self.props[B.PROPS_DEFAULT_CALENDAR_NAME] = \
                     project.default_calendar.encode("utf-16-le") + b"\0" * 4
         self.props[B.PROPS_PROJECT_START_DATE] = B.encode_timestamp(project.start)
+        if B.PROPS_PROJECT_FINISH_DATE in self.props:
+            self.props[B.PROPS_PROJECT_FINISH_DATE] = B.encode_timestamp(p_finish)
+        if project.status_date is not None and B.PROPS_STATUS_DATE in self.props:
+            self.props[B.PROPS_STATUS_DATE] = B.encode_timestamp(project.status_date)
+        if project.currency_symbol is not None and B.PROPS_CURRENCY_SYMBOL in self.props:
+            self.props[B.PROPS_CURRENCY_SYMBOL] = \
+                project.currency_symbol.encode("utf-16-le") + b"\0\0"
+        if project.currency_code is not None and B.PROPS_CURRENCY_CODE in self.props:
+            self.props[B.PROPS_CURRENCY_CODE] = \
+                project.currency_code.encode("utf-16-le") + b"\0\0"
+        # stale 2010-era next-uid counters make Project renumber task uids;
+        # M365 itself deletes the key on save
+        if B.PROPS_LEGACY_NEXT_UIDS in self.props:
+            del self.props[B.PROPS_LEGACY_NEXT_UIDS]
+            self.props_order.remove(B.PROPS_LEGACY_NEXT_UIDS)
         if B.PROPS_TITLE in self.props:
             self.props[B.PROPS_TITLE] = project.title.encode("utf-16-le") + b"\0" * 4   # Props strings: double NUL
         self._set(f"{PRJ}/Props", B.build_props(self.props_hdr, self.props, self.props_order))
+
+        # document metadata: SummaryInformation (title, subject, author, keywords,
+        # comments) + DocumentSummaryInformation (manager, company, category)
+        si_updates = {2: project.title}
+        for pid, val in ((3, project.subject), (4, project.author),
+                         (5, project.keywords), (6, project.comments)):
+            if val is not None:
+                si_updates[pid] = val
+        try:
+            si = self.root.children["\x05SummaryInformation"]
+            self.root.set_path("\x05SummaryInformation",
+                               B.update_property_set_strings(si, si_updates))
+            dsi_updates = {}
+            for pid, val in ((14, project.manager), (15, project.company),
+                             (2, project.category)):
+                if val is not None:
+                    dsi_updates[pid] = val
+            if dsi_updates:
+                dsi = self.root.children["\x05DocumentSummaryInformation"]
+                self.root.set_path("\x05DocumentSummaryInformation",
+                                   B.update_property_set_strings(dsi, dsi_updates))
+        except KeyError:
+            pass
         return write_cfb(self.root, root_clsid=PROJECT_CLSID)
 
     def write(self, project: Project, path: str) -> None:

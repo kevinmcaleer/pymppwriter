@@ -17,8 +17,14 @@ PROPS_RESOURCE_FIELD_MAP = 131093
 PROPS_RELATION_FIELD_MAP = 131094
 PROPS_ASSIGNMENT_FIELD_MAP = 131095
 PROPS_PROJECT_START_DATE = 37748738
+PROPS_PROJECT_FINISH_DATE = 37748739      # 0x2400003
 PROPS_TITLE = 37748744
 PROPS_DEFAULT_CALENDAR_NAME = 37748750    # UTF-16 name + 4 NUL bytes
+PROPS_CURRENCY_SYMBOL = 37748752          # 0x2400010
+PROPS_STATUS_DATE = 37748805              # 0x2400045; 0xFFFFFFFF = NA
+PROPS_CURRENCY_CODE = 37753787            # 0x24013BB, e.g. "USD"
+PROPS_LEGACY_NEXT_UIDS = 37748910         # 0x24000AE: 2010-era only; stale values make
+                                          # Project renumber task uids, M365 drops it on save
 PROPS_EDITED_BASE_CALENDARS = 8388609     # 0x800001: base calendars with custom data
 # 0x10001..: Var2Data byte length per storage — Project truncates its var-data
 # read at the declared length, so a stale value hides var entries
@@ -213,6 +219,56 @@ def build_var_blocks(header: bytes, values: List[Tuple[int, int, bytes]], field_
     struct.pack_into("<I", meta, 8, len(values))
     struct.pack_into("<I", meta, 20, len(var))
     return bytes(meta) + bytes(entries), bytes(var)
+
+
+# ------------------------------------- OLE property sets (MS-OLEPS) --------
+VT_LPSTR = 30
+
+
+def update_property_set_strings(data: bytes, updates: Dict[int, str], section: int = 0,
+                                codepage: str = "cp1252") -> bytes:
+    """Replace or add VT_LPSTR properties in one section of an OLE property set
+    stream (SummaryInformation / DocumentSummaryInformation), keeping every
+    other property byte-for-byte."""
+    nsec = struct.unpack_from("<I", data, 24)[0]
+    header = data[:28]
+    secs = []
+    for s in range(nsec):
+        fmtid = data[28 + s * 20:44 + s * 20]
+        off = struct.unpack_from("<I", data, 44 + s * 20)[0]
+        size, cnt = struct.unpack_from("<II", data, off)
+        entries = [struct.unpack_from("<II", data, off + 8 + i * 8) for i in range(cnt)]
+        bounds = sorted(e[1] for e in entries) + [size]
+        raw, order = {}, []
+        for pid, poff in entries:
+            nxt = min(b for b in bounds if b > poff)
+            raw[pid] = data[off + poff:off + nxt]
+            order.append(pid)
+        secs.append([fmtid, order, raw])
+    fmtid, order, raw = secs[section]
+    for pid, val in updates.items():
+        b = val.encode(codepage, "replace") + b"\0"
+        v = struct.pack("<II", VT_LPSTR, len(b)) + b
+        raw[pid] = v + b"\0" * ((-len(v)) % 4)
+        if pid not in order:
+            order.append(pid)
+    out_secs = []
+    for fm, ord_, rw in secs:
+        base = 8 + len(ord_) * 8
+        body, entries = bytearray(), []
+        for pid in ord_:
+            v = rw[pid] + b"\0" * ((-len(rw[pid])) % 4)
+            entries.append((pid, base + len(body)))
+            body += v
+        sec = struct.pack("<II", base + len(body), len(ord_))
+        for pid, poff in entries:
+            sec += struct.pack("<II", pid, poff)
+        out_secs.append((fm, sec + bytes(body)))
+    dir_, pos = bytearray(), 28 + len(out_secs) * 20
+    for fm, sec in out_secs:
+        dir_ += fm + struct.pack("<I", pos)
+        pos += len(sec)
+    return bytes(header) + bytes(dir_) + b"".join(sec for _, sec in out_secs)
 
 
 # ------------------------------------------------------ calendar data ------

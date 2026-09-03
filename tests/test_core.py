@@ -181,6 +181,48 @@ def test_writer_task_fields(tmp_path):
     assert NATIVE["NOTES"] not in vt[2]
 
 
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_project_metadata(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task
+    p = Project("Meta test", D(2026, 9, 7, 8),
+                [Task(1, "A", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2)],
+                author="Kevin McAleer", subject="Robots", keywords="robots;3dprinting",
+                comments="Made by pymppwriter", manager="Kev", company="Kev's Robots",
+                category="Video", status_date=D(2026, 9, 8, 17),
+                currency_symbol="£", currency_code="GBP")
+    out = tmp_path / "o.mpp"
+    MppWriter("templates/template.mpp").write(p, str(out))
+    ole = olefile.OleFileIO(str(out))
+    si = ole.openstream("\x05SummaryInformation").read()
+
+    def lpstr(data, want_pid):
+        nsec = struct.unpack_from("<I", data, 24)[0]
+        for s in range(nsec):
+            off = struct.unpack_from("<I", data, 44 + s * 20)[0]
+            size, cnt = struct.unpack_from("<II", data, off)
+            for i in range(cnt):
+                pid, poff = struct.unpack_from("<II", data, off + 8 + i * 8)
+                if pid == want_pid and s == 0:
+                    vt, ln = struct.unpack_from("<II", data, off + poff)
+                    assert vt == 30
+                    return data[off + poff + 8:off + poff + 8 + ln].rstrip(b"\0").decode("cp1252")
+        return None
+    assert lpstr(si, 2) == "Meta test"
+    assert lpstr(si, 3) == "Robots"
+    assert lpstr(si, 4) == "Kevin McAleer"
+    assert lpstr(si, 5) == "robots;3dprinting"
+    dsi = ole.openstream("\x05DocumentSummaryInformation").read()
+    assert lpstr(dsi, 14) == "Kev"
+    assert lpstr(dsi, 15) == "Kev's Robots"
+    _, props, _ = B.parse_props(ole.openstream("   114/Props").read())
+    assert B.decode_timestamp(props[B.PROPS_PROJECT_FINISH_DATE], 0) == D(2026, 9, 8, 17)
+    assert B.decode_timestamp(props[B.PROPS_STATUS_DATE], 0) == D(2026, 9, 8, 17)
+    assert props[B.PROPS_CURRENCY_SYMBOL].startswith("£".encode("utf-16-le"))
+    assert props[B.PROPS_CURRENCY_CODE].startswith("GBP".encode("utf-16-le"))
+    assert B.PROPS_LEGACY_NEXT_UIDS not in props
+
+
 def test_meta_bitmap_set_and_get_across_blocks():
     meta, meta2 = bytearray(47), bytearray(92)
     for idx in (0, 10, 311, 312, 400):
