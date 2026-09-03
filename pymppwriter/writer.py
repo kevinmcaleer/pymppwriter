@@ -34,7 +34,7 @@ RSC_NATIVE = {"UNIQUE_ID": 27, "ID": 0, "NAME": 1, "INITIALS": 2, "EMAIL_ADDRESS
 ASSN_NATIVE = {"UNIQUE_ID": 0, "TASK_UNIQUE_ID": 1, "RESOURCE_UNIQUE_ID": 2, "START": 20,
                "FINISH": 21, "RESUME": 24, "STOP": 264, "UNITS": 7, "WORK": 8,
                "REGULAR_WORK": 11, "REMAINING_WORK": 12, "GUID": 636, "TASK_GUID": 637,
-               "RESOURCE_GUID": 638, "CREATED": 634}
+               "RESOURCE_GUID": 638, "CREATED": 634, "PLANNED_WORK_DATA": 49}
 REL_TYPES = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
 PCT_SCALE = 10000.0            # resource max units / assignment units: 10000.0 = 100%
 WORK_SCALE = 100.0             # work doubles are minutes*1000 = duration tenths * 100
@@ -535,6 +535,18 @@ class MppWriter:
             for typ, payload in self.assn_proto["var"]:
                 if typ == ASSN_NATIVE["CREATED"]:
                     payload = B.encode_timestamp(datetime.now().replace(second=0, microsecond=0))
+                elif typ == ASSN_NATIVE["PLANNED_WORK_DATA"] and len(payload) >= 36:
+                    # planned-work contour: Project reads the assignment's work from
+                    # here (not the fixed WORK field) and rescheduled tasks to the
+                    # prototype's 1-day shape until it was patched.
+                    # +8 double: 160000.0 at 100% units in every observed file
+                    # (units*16; indistinguishable from a constant at 100%),
+                    # +16 double: total work, +24 uint32: work * 0.08
+                    b2 = bytearray(payload)
+                    struct.pack_into("<d", b2, 8, asn.units * PCT_SCALE * 16)
+                    struct.pack_into("<d", b2, 16, work)
+                    struct.pack_into("<I", b2, 24, int(round(work * 0.08)))
+                    payload = bytes(b2)
                 avar_entries.append((i, typ, payload))
         a = f"{PRJ}/TBkndAssn"
         afd, afm = assemble(afixed, ameta)

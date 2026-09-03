@@ -186,3 +186,11 @@ def test_writer_resources_and_assignments(tmp_path):
     assert arecs2[0][tg.offset:tg.offset + 16] == p.tasks[0].guid
     assert arecs2[0][rg.offset:rg.offset + 16] == kev.guid
     assert arecs2[1][rg.offset:rg.offset + 16] == bot.guid
+    # planned-work contour blob restates the work (Project reads duration from it)
+    _, avt, _ = B.parse_var_meta(r("TBkndAssn/VarMeta"))
+    avd = r("TBkndAssn/Var2Data")
+    blob = B.read_var(avd, avt[2][ASSN_NATIVE["PLANNED_WORK_DATA"]])
+    work2 = 4800 * 100.0 * 0.5
+    assert struct.unpack_from("<d", blob, 16)[0] == work2
+    assert struct.unpack_from("<I", blob, 24)[0] == int(work2 * 0.08)
+    assert struct.unpack_from("<d", blob, 8)[0] == 0.5 * 10000.0 * 16
