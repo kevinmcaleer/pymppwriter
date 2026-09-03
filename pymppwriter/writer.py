@@ -27,7 +27,9 @@ NATIVE = {"UNIQUE_ID": 86, "ID": 23, "NAME": 14, "START": 35, "FINISH": 36, "DUR
           "REMAINING_DURATION": 31, "OUTLINE_LEVEL": 249, "PARENT_UID": 160, "EARLY_START": 37,
           "EARLY_FINISH": 38, "LATE_START": 39, "LATE_FINISH": 40, "CREATED": 93, "GUID": 1143,
           "MILESTONE": 24, "SUMMARY": 92, "ESTIMATED": 396, "ACTUAL_DURATION_UNITS": 181,
-          "TASK_MODE": 1280, "WORK": 0, "REMAINING_WORK": 4, "CALENDAR_UNIQUE_ID": 401}
+          "TASK_MODE": 1280, "WORK": 0, "REMAINING_WORK": 4, "CALENDAR_UNIQUE_ID": 401,
+          "MANUAL_START": 1283, "MANUAL_FINISH": 1284, "MANUAL_DURATION": 1288,
+          "MANUALLY_SCHEDULED": 1408}   # the flag M365 actually reads; 1280 stays set either way
 CAL_NAME_VAR, CAL_DATA_VAR = 1, 8
 RSC_NATIVE = {"UNIQUE_ID": 27, "ID": 0, "NAME": 1, "INITIALS": 2, "EMAIL_ADDRESS": 35,
               "MAX_UNITS": 4, "CALENDAR_UID": 56, "GUID": 728, "CALENDAR_GUID": 729,
@@ -246,12 +248,16 @@ class MppWriter:
         vh, vtable, _ = B.parse_var_meta(self._get(f"{t}/VarMeta"))
         vdata = self._get(f"{t}/Var2Data")
         self.task_meta_hdr, self.task_meta2_hdr, self.task_var_hdr = mh, m2h, vh
-        # prototype = first full-size record that is a real task (uid > 0) else summary
+        # prototypes: the uid-0 project summary, and the first real LEAF task
+        # (in the recipe template, Task 1 is itself a summary — skip it)
         full = [i for i, r in enumerate(recs) if len(r) > 100]
         if not full:
             raise ValueError("template has no task records to use as prototypes")
         summary_i = full[0]
-        task_i = full[1] if len(full) > 1 else full[0]
+        sum_bit = self.task_bit.get(NATIVE["SUMMARY"])
+        task_i = next((i for i in full[1:]
+                       if sum_bit is None or not B.meta_bit(mitems[i], m2items[i], sum_bit)),
+                      full[-1] if len(full) > 1 else full[0])
         self.proto = {}
         for label, i in (("summary", summary_i), ("task", task_i)):
             uid = struct.unpack_from("<I", recs[i], 0)[0]
@@ -282,8 +288,13 @@ class MppWriter:
         avdata = self._get(f"{a}/Var2Data")
         self.assn_meta_hdr, self.assn_meta2_hdr, self.assn_var_hdr = amh[:16], am2h[:16], avh[:24]
         self.assn_proto = None
+        task_it = self.assn_fm.get(ASSN_NATIVE["TASK_UNIQUE_ID"])
         for i, rec in enumerate(arecs):
             if len(rec) > 50 and i < len(arecs2):
+                # skip the project-summary placeholder (task uid 0): it carries
+                # no var data, so it lacks the planned-work contour prototype
+                if task_it is not None and struct.unpack_from("<I", rec, task_it.offset)[0] == 0:
+                    continue
                 uid = struct.unpack_from("<I", rec, 0)[0]
                 var = [(typ, B.read_var(avdata, off)) for typ, off in sorted(avtable.get(uid, {}).items())]
                 self.assn_proto = dict(rec=rec, rec2=arecs2[i], meta=amitems[i], meta2=am2items[i], var=var)
@@ -330,28 +341,39 @@ class MppWriter:
                               meta=clmitems[i], meta2=clm2items[i] if i < len(clm2items) else b"")
                          for i in range(len(clrecs))]
         self.cal_proto = self.cal_cols = self.cal_standard_uid = self.cal_standard_guid = None
-        self.cal_base_row = None
-        base_row = None
+        self.cal_base_row = self.cal_uid_col = None
+        # column order varies by Project vintage, so anchor on the uid-0
+        # resource's calendar row: its three values — its own calendar uid
+        # (from the resource record's CALENDAR_UID field), the Standard uid,
+        # and resource uid 0 — are distinct and identify each column
+        rsc0_cal_uid = None
+        if self.rsc_proto is not None:
+            it = self.rsc_fm.get(RSC_NATIVE["CALENDAR_UID"])
+            if it is not None:
+                src = self.rsc_proto["rec"] if it.block == 0 else self.rsc_proto["rec2"]
+                if it.offset + 4 <= len(src):
+                    rsc0_cal_uid = struct.unpack_from("<i", src, it.offset)[0]
         for row in self.cal_rows:
-            if len(row["rec"]) == 12:
-                d = struct.unpack("<3i", row["rec"])
-                if d.count(-1) == 2:                       # base calendar row (Standard)
-                    uid_col = next(j for j in range(3) if d[j] != -1)
-                    base_row = row
-                    self.cal_standard_uid = d[uid_col]
-                    self.cal_standard_guid = row["rec2"][:16]
-                    self.cal_uid_col = uid_col
-        self.cal_base_row = base_row
-        if base_row is not None:
+            if len(row["rec"]) != 12 or not rsc0_cal_uid:
+                continue
+            d = struct.unpack("<3i", row["rec"])
+            if rsc0_cal_uid in d and 0 in d:
+                uid_col = d.index(rsc0_cal_uid)
+                rsc_col = d.index(0)
+                base_col = next(j for j in range(3) if j not in (uid_col, rsc_col))
+                self.cal_cols = (uid_col, base_col, rsc_col)
+                self.cal_uid_col = uid_col
+                self.cal_standard_uid = d[base_col]
+                self.cal_proto = row
+                break
+        if self.cal_cols is not None:
             for row in self.cal_rows:
-                if len(row["rec"]) == 12 and row is not base_row:
+                if len(row["rec"]) == 12 and row is not self.cal_proto:
                     d = struct.unpack("<3i", row["rec"])
-                    others = [j for j in range(3) if j != self.cal_uid_col]
-                    base_col = next((j for j in others if d[j] == self.cal_standard_uid), others[0])
-                    rsc_col = next(j for j in others if j != base_col)
-                    self.cal_cols = (self.cal_uid_col, base_col, rsc_col)
-                    self.cal_proto = row
-                    break
+                    if d[self.cal_uid_col] == self.cal_standard_uid:
+                        self.cal_base_row = row
+                        self.cal_standard_guid = row["rec2"][:16]
+                        break
 
     def _put(self, rec: bytearray, name: str, fmt: str, value) -> None:
         it = self.task_fm.get(NATIVE[name])
@@ -497,6 +519,11 @@ class MppWriter:
             self._put_bit(m, m2, "SUMMARY", is_summary)
             self._put_bit(m, m2, "MILESTONE", not is_summary and dur_tenths == 0)
             self._put_bit(m, m2, "ESTIMATED", estimated)
+            # written tasks are auto-scheduled; M365 templates default to manual
+            self._put_bit(m, m2, "MANUALLY_SCHEDULED", False)
+            self._putf_ts(self.task_fm, NATIVE, rec, rec2, "MANUAL_START", None)
+            self._putf_ts(self.task_fm, NATIVE, rec, rec2, "MANUAL_FINISH", None)
+            self._putf(self.task_fm, NATIVE, rec, rec2, "MANUAL_DURATION", "<i", -1)
             if cal_uid is not None:
                 self._put(rec, "CALENDAR_UNIQUE_ID", "<i", cal_uid)
                 self._put_bit(m, m2, "CALENDAR_UNIQUE_ID", True)

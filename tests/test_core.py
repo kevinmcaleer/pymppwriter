@@ -154,8 +154,10 @@ def test_writer_end_to_end_with_template(tmp_path):
     assert dur(1) == 9600                                     # 2 working days from child
     assert units(2) == 0x07 and bit(2, "SUMMARY") == 0 and bit(2, "MILESTONE") == 0
     assert dur(3) == 0 and bit(3, "MILESTONE") == 1           # zero duration -> milestone
-    assert units(4) == 0x27 and bit(4, "ESTIMATED") == 1      # estimated flag 0x20
-    assert bit(2, "ESTIMATED") == 0
+    assert units(4) == 0x27                                   # estimated flag 0x20
+    if NATIVE["ESTIMATED"] in w.task_bit:                     # absent from M365 field maps
+        assert bit(4, "ESTIMATED") == 1
+        assert bit(2, "ESTIMATED") == 0
     # phantom assignments cleared, record counters patched
     assert ole.get_size("   114/TBkndAssn/FixedData") == 0
     assert struct.unpack_from("<I", ole.openstream("   114/TBkndAssn/FixedMeta").read(), 8)[0] == 0
