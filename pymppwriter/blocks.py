@@ -18,6 +18,12 @@ PROPS_RELATION_FIELD_MAP = 131094
 PROPS_ASSIGNMENT_FIELD_MAP = 131095
 PROPS_PROJECT_START_DATE = 37748738
 PROPS_TITLE = 37748744
+PROPS_DEFAULT_CALENDAR_NAME = 37748750    # UTF-16 name + 4 NUL bytes
+PROPS_EDITED_BASE_CALENDARS = 8388609     # 0x800001: base calendars with custom data
+# 0x10001..: Var2Data byte length per storage — Project truncates its var-data
+# read at the declared length, so a stale value hides var entries
+PROPS_VAR2DATA_SIZE = {"TBkndTask": 65537, "TBkndRsc": 65538, "TBkndCal": 65539,
+                       "TBkndAssn": 65540}
 # record-count dwords: Project sizes its tables from these on load and drops
 # records beyond the count (verified against four Project-written files)
 PROPS_TASK_RECORD_COUNT = 16777217        # 0x1000001, includes stubs + uid-0 summary
@@ -105,6 +111,18 @@ def parse_fixed_meta(data: bytes, item_size: int) -> Tuple[bytes, int, List[byte
     n = (len(data) - 16) // item_size
     items = [data[16 + i * item_size:16 + (i + 1) * item_size] for i in range(n)]
     return data[:16], count, items
+
+
+def parse_fixed_meta_auto(data: bytes, default_size: int) -> Tuple[bytes, int, List[bytes]]:
+    """parse_fixed_meta with the item size derived from the header count, so
+    files of any Project vintage parse (M365 uses 96/51/10-byte Fixed2Meta
+    items where 2010-era files use 92/50/9). Falls back to default_size when
+    the stream length is not an exact multiple (trailing slack)."""
+    count = struct.unpack_from("<I", data, 8)[0]
+    size = default_size
+    if count and (len(data) - 16) % count == 0:
+        size = (len(data) - 16) // count
+    return parse_fixed_meta(data, size)
 
 
 def build_fixed_meta(header: bytes, items: List[bytes], data_len: Optional[int] = None) -> bytes:
@@ -195,6 +213,67 @@ def build_var_blocks(header: bytes, values: List[Tuple[int, int, bytes]], field_
     struct.pack_into("<I", meta, 8, len(values))
     struct.pack_into("<I", meta, 20, len(var))
     return bytes(meta) + bytes(entries), bytes(var)
+
+
+# ------------------------------------------------------ calendar data ------
+CAL_DAY_NONWORKING, CAL_DAY_DEFAULT, CAL_DAY_WORKING = 0, 1, 2
+
+
+def build_calendar_data(days, exceptions=()) -> bytes:
+    """Calendar definition blob (var-data key 8 on a TBkndCal record), in the
+    dialect Microsoft Project M365 writes (an earlier form using day type 2
+    for working days is readable by MPXJ but ignored by Project).
+
+    days: 7 (day_type, ranges) tuples, SUNDAY first; ranges are
+    (start_minute, end_minute) pairs from midnight, at most 5 per day and only
+    meaningful for CAL_DAY_WORKING.
+    exceptions: (from_date, to_date, name) tuples of non-working days, sorted.
+
+    Each 60-byte day block: uint16 day type on the wire (1 = default,
+    0 = explicit; working vs non-working is the range count), uint16 range
+    count, uint32 total working tenths-of-a-minute at +4, range start times as
+    uint16 tenths at +8 (stride 2), range durations as uint32 tenths at +20
+    (stride 4) and duplicated at +40. Exceptions: uint32 count, then per
+    exception a 92-byte record (uint16 from-day, uint16 to-day, uint16 day
+    count, recurrence dwords 1, 0, 1, 0x4000 at +72, uint32 name byte length
+    at +88) followed by the UTF-16 name, zero-padded to a 4-byte boundary plus
+    4 more zero bytes (both as observed in Project-written files).
+    """
+    if len(days) != 7:
+        raise ValueError("days must have exactly 7 entries, Sunday first")
+    out = bytearray()
+    for dtype, ranges in days:
+        b = bytearray(60)
+        struct.pack_into("<H", b, 0, 1 if dtype == CAL_DAY_DEFAULT else 0)
+        if dtype == CAL_DAY_WORKING:
+            ranges = list(ranges)[:5]
+            struct.pack_into("<H", b, 2, len(ranges))
+            struct.pack_into("<I", b, 4, sum(end - start for start, end in ranges) * 10)
+            cumulative = 0
+            for i, (start, end) in enumerate(ranges):
+                struct.pack_into("<H", b, 8 + 2 * i, start * 10)
+                struct.pack_into("<I", b, 20 + 4 * i, (end - start) * 10)
+                cumulative += (end - start) * 10
+                struct.pack_into("<I", b, 40 + 4 * i, cumulative)
+        out += b
+    if exceptions:
+        out += struct.pack("<I", len(exceptions))
+        for i, (from_date, to_date, name) in enumerate(exceptions):
+            rec = bytearray(92)
+            d1 = (from_date - EPOCH.date()).days
+            d2 = (to_date - EPOCH.date()).days
+            struct.pack_into("<HH", rec, 0, d1, d2)
+            struct.pack_into("<H", rec, 4, d2 - d1 + 1)
+            struct.pack_into("<I", rec, 72, 1)
+            struct.pack_into("<I", rec, 80, 1)
+            struct.pack_into("<I", rec, 84, 0x4000)
+            nb = (name + "\0").encode("utf-16-le")
+            struct.pack_into("<I", rec, 88, len(nb))
+            # next record 4-byte aligned; 4 extra zero bytes close the blob
+            out += rec + nb + b"\0" * ((-len(nb)) % 4)
+            if i == len(exceptions) - 1:
+                out += b"\0\0\0\0"
+    return bytes(out)
 
 
 # ------------------------------------------------------- primitives --------

@@ -9,7 +9,31 @@ import json
 import sys
 from datetime import datetime
 
-from .writer import MppWriter, Project, Task, Relation, Resource, Assignment
+from .writer import (MppWriter, Project, Task, Relation, Resource, Assignment,
+                     Calendar, CalendarException)
+
+DAY_NAMES = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def _minutes(s: str) -> int:
+    h, m = s.split(":")
+    return int(h) * 60 + int(m)
+
+
+def _calendar(spec: dict, name: str = "Standard") -> Calendar:
+    week = {}
+    for day, val in spec.get("week", {}).items():
+        wd = DAY_NAMES[day.lower()[:3]]
+        week[wd] = None if val is None else [(_minutes(a), _minutes(b)) for a, b in val]
+    excs = []
+    for x in spec.get("holidays", []):
+        if isinstance(x, str):
+            excs.append(CalendarException(_dt(x).date()))
+        else:
+            excs.append(CalendarException(_dt(x["from"]).date(),
+                                          _dt(x.get("to", x["from"])).date(),
+                                          x.get("name", "")))
+    return Calendar(spec.get("name", name), week, excs)
 
 
 def _dt(s: str) -> datetime:
@@ -26,13 +50,16 @@ def load_project(path: str) -> Project:
     tasks = [Task(uid=t["uid"], name=t["name"], start=_dt(t["start"]), finish=_dt(t["finish"]),
                   duration_days=t.get("duration_days", 1.0), outline_level=t.get("outline_level", 1),
                   parent_uid=t.get("parent_uid", 0), duration_units=t.get("duration_units", "d"),
-                  estimated=t.get("estimated", False)) for t in spec["tasks"]]
+                  estimated=t.get("estimated", False), calendar=t.get("calendar")) for t in spec["tasks"]]
     rels = [Relation(r["pred"], r["succ"], r.get("type", "FS"), r.get("lag_days", 0.0)) for r in spec.get("links", [])]
     rscs = [Resource(uid=r["uid"], name=r["name"], initials=r.get("initials", ""),
                      email=r.get("email", ""), max_units=r.get("max_units", 1.0))
             for r in spec.get("resources", [])]
     assns = [Assignment(a["task"], a["resource"], a.get("units", 1.0)) for a in spec.get("assignments", [])]
-    return Project(spec["title"], _dt(spec["start"]), tasks, rels, rscs, assns)
+    cal = _calendar(spec["calendar"]) if "calendar" in spec else None
+    cals = [_calendar(c, c["name"]) for c in spec.get("calendars", [])]
+    return Project(spec["title"], _dt(spec["start"]), tasks, rels, rscs, assns,
+                   calendar=cal, calendars=cals, default_calendar=spec.get("default_calendar"))
 
 
 def main(argv=None) -> int:

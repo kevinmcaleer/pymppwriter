@@ -61,7 +61,10 @@ A drop in fixedOffset marks the switch from FixedData (block 0) to Fixed2Data (b
 `FixedMeta`: `uint32 magic 0xFADFADBA, uint32 4, uint32 itemCount, uint32 fixedDataByteLen` then
 itemCount × N-byte items. **Both count and data-length dwords must be updated** when records change.
 Item bytes +4..+8 = uint32 offset of the record in `FixedData`.
-Item sizes: task 47 / 92 (meta2), resource 37 / 50–51, assignment 34, relation 10 / **9**, calendar 10
+Item sizes vary by Project vintage — derive them from `(streamLen - 16) / itemCount` (exact division;
+fall back to defaults when trailing slack makes it inexact). 2010-era: task 47 / 92 (meta2),
+resource 37 / 50, assignment 34 / 53, relation 10 / **9**, calendar 10 / 9. M365: task Fixed2Meta
+**96**, resource Fixed2Meta **51**, calendar Fixed2Meta **10**; the rest unchanged
 (the 9-byte relation meta2 item is offset dword + one trailing byte, 0x07 observed).
 `FixedData` is the concatenation of records; record size = next offset − this offset.
 
@@ -87,6 +90,11 @@ estimated (the "?" suffix); summary rows carry 0x15 instead of a unit code.
 Block 1 (64 bytes): `0 GUID, 16 double position, 24 ParentGUID, 50 Start(rollup), 54 Finish(rollup),
 58 ManualDuration, 62 ManualDurationUnits`. Summary/milestone/estimated flags are meta bitmap bits
 (see above), not Fixed2Data bytes.
+Manual vs auto scheduling: the flag M365 Project actually reads is **native id 1408's** bitmap bit
+(1 = manually scheduled); the classic id 1280 "TASK_MODE" bit stays set in both modes. Auto tasks
+carry -1/null in the block-1 manual start/finish/duration fields. M365 templates default new tasks
+to manually scheduled, so a writer must clear 1408's bit explicitly. ESTIMATED (396) has no entry in
+M365 field maps — the estimated flag lives in the units word alone there.
 Deleted tasks are 16-byte stubs (`UID 0xFFFF0000+n`) kept at the front of the block.
 
 ## Var blocks
@@ -138,13 +146,43 @@ the task to the wrong duration.
 
 ## Calendars (TBkndCal)
 FixedData: 16-byte deleted stubs, then 12-byte records of three int32 columns: calendar uid, base
-calendar uid, owning resource uid (-1s for a base calendar like Standard). **Column order varies by
-Project version** — (uid, base, resource) in 2010-era files, (base, resource, uid) in M365 files — so
-detect it: the Standard row is the one with two -1 columns, and its non-null column is the uid column.
+calendar uid, owning resource uid (-1s — or 0 for the base column in fresh M365 files — for a base
+calendar like Standard). **Column order varies by Project version** — (uid, base, resource) in
+2010-era files, (base, resource, uid) in M365 files — so detect it from the uid-0 resource's calendar
+row: its three values (its own calendar uid from the resource record's CALENDAR_UID field, the
+Standard uid, and resource uid 0) are distinct and identify every column.
 Fixed2Data record 48 bytes: `GUID calendar (= the owning resource's GUID), GUID calendar again, GUID of
 the base calendar` (zeros for Standard's own row beyond the first). Meta items 10 / 9-10 bytes.
-The working-week definition lives in Var2Data key 1 on the base calendar; per-resource calendars with no
-exceptions carry no var data. Each resource needs its own calendar record (base = Standard).
+Each resource needs its own calendar record (base = Standard); new base calendars use -1 for both the
+base and resource columns.
+
+Var2Data per calendar: **key 1 = name** (UTF-16), **key 8 = the definition blob**. A calendar with no
+blob uses Project's built-in defaults (Mon-Fri 08:00-12:00, 13:00-17:00). Blob layout (the dialect
+Project M365 writes and reads; an older form using day type 2 for working days is readable by MPXJ
+but **ignored by Project**):
+* 7 × 60-byte day blocks, **Sunday first**: `uint16 dayType (1 = default, 0 = explicit — working vs
+  non-working decided by the range count), uint16 rangeCount, uint32 total working tenths at +4`,
+  range start times as uint16 tenths-of-a-minute from midnight at +8 (stride 2), range durations as
+  uint32 tenths at +20 (stride 4) and cumulative durations at +40. Up to 5 ranges.
+* then optionally `uint32 exceptionCount` and per exception: a 92-byte record — `uint16 fromDay,
+  uint16 toDay` (days since 1983-12-31), `uint16 dayCount`, recurrence dwords `1, 0, 1, 0x4000` at
+  +72 (zeroes make readers reject the exception), `uint32 nameByteLen` at +88 — followed by the
+  UTF-16 name, zero-padded so the next record starts 4-byte aligned, with 4 closing zero bytes after
+  the last. Exceptions are sorted by date; only non-working exceptions are understood so far.
+
+**Three gates decide whether Project reads a base calendar's blob at all** (each was found the hard
+way; without any one of them the file opens but shows default working time):
+1. the record's meta item: flags byte 2 = the record's var entry count, and the trailing byte must
+   carry the has-data flag — **0x80 in 2010-era metas, 0x40 in M365 ones** (name-plus-data is 0xCF
+   in both, so OR 0xC0);
+2. Props key 65539 (0x10003) = the TBkndCal Var2Data byte length — Project truncates its var-data
+   read at the declared length (keys 65537/65538/65540 do the same for tasks/resources/assignments);
+3. Props key 8388609 (0x800001) = count of base calendars with custom working time (resource-calendar
+   blobs load regardless of it).
+The default project calendar is referenced **by name** in Props key 37748750 (UTF-16 + 4 NUL).
+A task's calendar is CALENDAR_UNIQUE_ID (native id 401, int32) in its fixed record plus the presence
+bit; -1/absent = project default. Props key 37753736 (0x2401388) holds a static 420-byte default-week
+definition (identical in every file observed; not where edits go).
 
 ## Verified against Microsoft Project (M365, Sep 2026)
 Container writer, task records, hierarchy, FS links, Props start date and title all open cleanly by double-click.
