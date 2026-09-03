@@ -101,9 +101,11 @@ def parse_fixed_meta(data: bytes, item_size: int) -> Tuple[bytes, int, List[byte
     return data[:16], count, items
 
 
-def build_fixed_meta(header: bytes, items: List[bytes]) -> bytes:
+def build_fixed_meta(header: bytes, items: List[bytes], data_len: Optional[int] = None) -> bytes:
     hdr = bytearray(header)
     struct.pack_into("<I", hdr, 8, len(items))
+    if data_len is not None:
+        struct.pack_into("<I", hdr, 12, data_len)   # header dword 3 = FixedData byte length
     return bytes(hdr) + b"".join(items)
 
 
@@ -117,6 +119,34 @@ def split_fixed_data(data: bytes, meta_items: List[bytes]) -> List[bytes]:
             nxt = len(data)
         out.append(data[off:nxt])
     return out
+
+
+# ------------------------------------------------------- meta bitmaps ------
+# A FixedMeta / Fixed2Meta item is: uint32 flags, uint32 offset-in-FixedData,
+# then a bitmap with one bit per TASK_FIELD_MAP entry (little-endian bit order).
+# FixedMeta carries entries 0..(item_size-8)*8-1; Fixed2Meta continues from there.
+# Boolean fields (category 0x0B/0x64) store their value in their entry's bit;
+# for other fields the bit marks the field as populated.
+
+def meta_bit(meta: bytes, meta2: bytes, entry_index: int) -> Optional[int]:
+    nbits0 = (len(meta) - 8) * 8
+    buf, i = (meta, entry_index) if entry_index < nbits0 else (meta2, entry_index - nbits0)
+    byte = 8 + i // 8
+    if byte >= len(buf):
+        return None
+    return (buf[byte] >> (i % 8)) & 1
+
+
+def set_meta_bit(meta: bytearray, meta2: bytearray, entry_index: int, value: bool) -> None:
+    nbits0 = (len(meta) - 8) * 8
+    buf, i = (meta, entry_index) if entry_index < nbits0 else (meta2, entry_index - nbits0)
+    byte = 8 + i // 8
+    if byte >= len(buf):
+        return
+    if value:
+        buf[byte] |= 1 << (i % 8)
+    else:
+        buf[byte] &= ~(1 << (i % 8)) & 0xFF
 
 
 # ---------------------------------------------------------- Var blocks -----

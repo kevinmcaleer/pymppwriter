@@ -104,7 +104,9 @@ MppWriter("templates/template.mpp").write(project, "robot-build.mpp")
 | `Project` | `title`, `start`, `tasks`, `relations` | `start` sets the project start date |
 | `Task` | `uid` | unique, > 0, stable across exports |
 | | `name`, `start`, `finish` | `datetime`s |
-| | `duration_days` | working days; 0 = milestone |
+| | `duration_days` | working days; 0 = milestone; ignored for summary tasks (rolled up from children in working time) |
+| | `duration_units` | display units: `"m"`, `"h"`, `"d"` (default), `"w"`, `"mo"` |
+| | `estimated` | `True` shows the duration with a trailing `?` |
 | | `outline_level` | 1 = top level, 2 = child, … |
 | | `parent_uid` | 0 = top level, else uid of the summary task |
 | | `guid` | auto-generated; pass your own to keep GUIDs stable between exports |
