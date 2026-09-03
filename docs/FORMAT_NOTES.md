@@ -37,8 +37,16 @@ Keys of interest:
 | 131093    | RESOURCE_FIELD_MAP |
 | 131094    | RELATION_FIELD_MAP |
 | 131095    | ASSIGNMENT_FIELD_MAP |
+| 16777217  | task record count (uint32, incl. deleted-task stubs and the uid-0 summary) |
+| 16777218  | resource record count |
+| 16777220  | assignment record count |
+| 16777221  | relation record count |
 | 37748738  | PROJECT_START_DATE (4-byte timestamp) |
 | 37748744  | TITLE |
+
+**The record counts must match the streams**: Project sizes its tables from them on load and
+silently drops records beyond the count (verified in Project M365 — the last task vanished
+while the count was one short).
 
 ## Field map entry (28 bytes)
 `+0 uint32 mask | +4 uint16 fixedOffset (65535 = not in fixed) | +6 byte varKey | +12 uint32 nativeFieldId | +20 uint16 category`
@@ -100,12 +108,20 @@ Fixed2Data record 48 bytes: `GUID link, GUID pred, GUID succ`.
 
 ## Verified against Microsoft Project (M365, Sep 2026)
 Container writer, task records, hierarchy, FS links, Props start date and title all open cleanly by double-click.
-Open defect: Project shows every task as "1 day?" — duration at FixedData+42 is written correctly but not honoured.
-Since then the writer sets the units word per task (estimated flag cleared), the milestone/summary/estimated
-meta bitmap bits, correct summary rollup durations, and the FixedMeta data-length dword — awaiting re-test in
-Project. If "1 day?" persists, diff a Project-resaved copy (type real durations, Save As) against the generated
-file with `scripts/diff_mpp_tasks.py` to locate the remaining marker.
+Durations verified correct, including display units (days/weeks), the estimated "?" flag, 0-day milestones and
+working-time summary rollups.
+
+The "every task shows 1 day?" defect had three causes, found by A/B tests in Project:
+1. **Phantom assignments**: the template's TBkndAssn records (one per template task, 1 day of work each) are
+   joined to tasks by task unique id, and Project overrides the task's duration from the assignment. MPXJ
+   ignores them, which is why the MPXJ oracle always read the written durations correctly while Project did
+   not. The writer now empties TBkndAssn.
+2. **Stale record counts** in Props (see table above) made Project drop task records beyond the template's
+   count and load the template's relation/assignment counts.
+3. The units word / estimated flag and the boolean meta-bitmap bits (milestone/summary/estimated) had to be
+   written per task — Project honours them exactly as described above.
 
 ## Not yet handled
-Resources, assignments (phantom per-task records exist in the template and must be regenerated or cleared),
-calendars, notes, custom fields, SummaryInformation title, "next UID" counters in Props, baselines, timephased data.
+Resources, assignments (cleared, not yet writable), calendars, notes, custom fields, SummaryInformation title
+(MPXJ reads the title from there, Project from Props), baselines, timephased data, view scroll position
+(CV_iew — the Gantt opens scrolled to the template's dates).

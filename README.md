@@ -8,10 +8,10 @@ Microsoft 365 desktop client). Files it writes open in Project by double-click �
 whole point: an `.mpp` download is associated with Project on every corporate PC, whereas the
 MSPDI `.xml` export has to be opened manually from inside Project.
 
-> **Status: alpha, spike-quality.** Task names, hierarchy, dates, dependencies and the project
-> start date are verified to open in Project M365. Durations are currently *not* honoured by
-> Project (it shows "1 day?") — see the roadmap. Resources, assignments, calendars, notes and
-> custom fields are not yet written. Treat this as a working proof-of-concept, not a product.
+> **Status: alpha.** Task names, hierarchy, dates, durations (values, display units, estimated
+> flags, milestones and summary rollups), dependencies and the project start date are verified
+> to open correctly in Project M365. Resources, assignments, calendars, notes and custom
+> fields are not yet written. Treat this as a working proof-of-concept, not a product.
 
 ## How it works
 
@@ -137,8 +137,8 @@ The end-to-end test is skipped unless `templates/template.mpp` exists.
 
 Tracked in the [GitHub Project](../../projects). Headline epics:
 
-1. **Durations honoured by Project** — the last blocker for basic usefulness
-2. **Resources & assignments** — including clearing the template's phantom assignment records
+1. ~~**Durations honoured by Project**~~ — done (verified in Project M365)
+2. **Resources & assignments** — the template's phantom assignment records are now cleared; writing real ones is next
 3. **Calendars** — project calendar and per-task calendar
 4. **Notes, custom fields, WBS, constraints, deadlines**
 5. **Round-trip fidelity** — `Save` from Project after opening produces an identical schedule
