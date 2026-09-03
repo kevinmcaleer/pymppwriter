@@ -143,8 +143,23 @@ Project version** — (uid, base, resource) in 2010-era files, (base, resource, 
 detect it: the Standard row is the one with two -1 columns, and its non-null column is the uid column.
 Fixed2Data record 48 bytes: `GUID calendar (= the owning resource's GUID), GUID calendar again, GUID of
 the base calendar` (zeros for Standard's own row beyond the first). Meta items 10 / 9-10 bytes.
-The working-week definition lives in Var2Data key 1 on the base calendar; per-resource calendars with no
-exceptions carry no var data. Each resource needs its own calendar record (base = Standard).
+Each resource needs its own calendar record (base = Standard); new base calendars use -1 for both the
+base and resource columns.
+
+Var2Data per calendar: **key 1 = name** (UTF-16), **key 8 = the definition blob**. A calendar with no
+blob uses Project's built-in defaults (Mon-Fri 08:00-12:00, 13:00-17:00). Blob layout:
+* 7 × 60-byte day blocks, **Sunday first**: `uint16 dayType (0 non-working, 1 default, 2 working),
+  uint16 rangeCount`, range start times as uint16 tenths-of-a-minute from midnight at +8 (stride 2),
+  range durations as uint32 tenths at +20 (stride 4). Up to 5 ranges.
+* then optionally `uint32 exceptionCount` and per exception: a 92-byte record — `uint16 fromDay,
+  uint16 toDay` (days since 1983-12-31), `uint16 dayCount`, recurrence data at +72 (four dwords;
+  a one-off date range is `1, 0x238CF1F7, 1, 0xC4DB7B9F`, byte-copied from a Project file — zeroes
+  make readers reject the exception), `uint32 nameByteLen` at +88 — followed by the UTF-16 name and
+  zero padding so the next record starts 4-byte aligned. Exceptions are sorted by date; only
+  non-working exceptions are understood so far (time-range offsets for working exceptions unknown).
+The default project calendar is referenced **by name** in Props key 37748750 (UTF-16 + 4 NUL).
+A task's calendar is CALENDAR_UNIQUE_ID (native id 401, int32) in its fixed record plus the presence
+bit; -1/absent = project default.
 
 ## Verified against Microsoft Project (M365, Sep 2026)
 Container writer, task records, hierarchy, FS links, Props start date and title all open cleanly by double-click.

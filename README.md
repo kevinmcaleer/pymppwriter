@@ -121,6 +121,20 @@ MppWriter("templates/template.mpp").write(project, "robot-build.mpp")
 | | `guid` | auto-generated; pass your own to keep GUIDs stable |
 | `Assignment` | `task_uid`, `resource_uid` | must reference existing tasks/resources |
 | | `units` | 1.0 = 100% (default); work is computed from the task's duration |
+| `Calendar` | `name` | `Project.calendar` edits Standard; `Project.calendars` adds base calendars |
+| | `week` | `{weekday: ranges}`; weekday 0=Mon..6=Sun; ranges = `[(start_min, end_min), …]` or `None` for non-working; missing days keep defaults |
+| | `exceptions` | list of `CalendarException(start, finish=None, name="")` — non-working dates |
+| `CalendarException` | `start`, `finish` | `datetime.date`s; `finish` defaults to `start` |
+
+Set `Task.calendar` to a calendar name to schedule that task on it, and
+`Project.default_calendar` to change the project calendar. Summary/rollup durations are computed
+in working time using `Project.calendar`'s week and holidays.
+
+```json
+"calendar": {"week": {"wed": [["08:00", "12:00"]], "sat": null},
+             "holidays": ["2026-09-21", {"from": "2026-10-01", "to": "2026-10-02", "name": "Conf"}]},
+"calendars": [ {"name": "Nights", "week": {"mon": [["18:00", "22:00"]]}} ]
+```
 
 In JSON specs, resources and assignments look like:
 
