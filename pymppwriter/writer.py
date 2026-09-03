@@ -653,6 +653,12 @@ class MppWriter:
                                           self.cal_var_hi)
             self._set(f"{PRJ}/TBkndCal/VarMeta", cvm)
             self._set(f"{PRJ}/TBkndCal/Var2Data", cvd)
+            # Project reads base-calendar data blobs only when this Props count
+            # says edited base calendars exist (resource-calendar blobs load
+            # regardless of it)
+            n_edited = sum(1 for uid, typ, _ in cal_var_new if typ == CAL_DATA_VAR)
+            if B.PROPS_EDITED_BASE_CALENDARS in self.props:
+                self.props[B.PROPS_EDITED_BASE_CALENDARS] = struct.pack("<I", n_edited)
 
         # assignments ----------------------------------------------------------
         # the template's phantom per-task records are never kept: Project joins them

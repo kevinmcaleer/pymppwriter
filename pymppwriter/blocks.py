@@ -19,6 +19,7 @@ PROPS_ASSIGNMENT_FIELD_MAP = 131095
 PROPS_PROJECT_START_DATE = 37748738
 PROPS_TITLE = 37748744
 PROPS_DEFAULT_CALENDAR_NAME = 37748750    # UTF-16 name + 4 NUL bytes
+PROPS_EDITED_BASE_CALENDARS = 8388609     # 0x800001: base calendars with custom data
 # record-count dwords: Project sizes its tables from these on load and drops
 # records beyond the count (verified against four Project-written files)
 PROPS_TASK_RECORD_COUNT = 16777217        # 0x1000001, includes stubs + uid-0 summary
