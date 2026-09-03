@@ -37,8 +37,16 @@ Keys of interest:
 | 131093    | RESOURCE_FIELD_MAP |
 | 131094    | RELATION_FIELD_MAP |
 | 131095    | ASSIGNMENT_FIELD_MAP |
+| 16777217  | task record count (uint32, incl. deleted-task stubs and the uid-0 summary) |
+| 16777218  | resource record count |
+| 16777220  | assignment record count |
+| 16777221  | relation record count |
 | 37748738  | PROJECT_START_DATE (4-byte timestamp) |
 | 37748744  | TITLE |
+
+**The record counts must match the streams**: Project sizes its tables from them on load and
+silently drops records beyond the count (verified in Project M365 — the last task vanished
+while the count was one short).
 
 ## Field map entry (28 bytes)
 `+0 uint32 mask | +4 uint16 fixedOffset (65535 = not in fixed) | +6 byte varKey | +12 uint32 nativeFieldId | +20 uint16 category`
@@ -50,16 +58,35 @@ A drop in fixedOffset marks the switch from FixedData (block 0) to Fixed2Data (b
 **The writer reads the template's own field map, so offsets are never hard-coded.**
 
 ## Fixed blocks
-`FixedMeta`: `uint32 magic 0xFADFADBA, uint32, uint32 itemCount, uint32` then itemCount × N-byte items.
-Item bytes +4..+8 = uint32 offset of the record in `FixedData`; the rest are per-record flag bits.
-Item sizes: task 47 / 92 (meta2), resource 37 / 50–51, assignment 34, relation 10 / 10, calendar 10.
+`FixedMeta`: `uint32 magic 0xFADFADBA, uint32 4, uint32 itemCount, uint32 fixedDataByteLen` then
+itemCount × N-byte items. **Both count and data-length dwords must be updated** when records change.
+Item bytes +4..+8 = uint32 offset of the record in `FixedData`.
+Item sizes: task 47 / 92 (meta2), resource 37 / 50–51, assignment 34, relation 10 / **9**, calendar 10
+(the 9-byte relation meta2 item is offset dword + one trailing byte, 0x07 observed).
 `FixedData` is the concatenation of records; record size = next offset − this offset.
 
-Task record (block 0, 206 bytes in the reference) — key offsets from the field map:
-`0 UID, 4 ID, 8 EarlyFinish, 12 LateStart, 24 FreeSlack, 36 ParentUID, 40 OutlineLevel(u16), 42 Duration, 46 DurationUnits,
-52 RemainingDuration, 56 ConstraintType, 64 Start, 68 Finish, 72 ActualStart, 80 ConstraintDate, 88 Priority, 94 Type,
-98 Created, 106 EarlyStart, 110 LateFinish, 126 Work(double), 150 Cost(double)`.
-Block 1 (64 bytes): `0 GUID, 16 double position, 24 ParentGUID`. Summary flag = bit 0x20 of Fixed2Meta byte 8.
+**Meta item bitmap** (the bytes after the offset dword): one bit per TASK_FIELD_MAP *entry*,
+little-endian bit order, indexed by the entry's position in the field map. The task FixedMeta item
+carries entries 0..311 ((47−8)×8), Fixed2Meta continues at 312. Boolean fields (category 0x0B/0x64 —
+MILESTONE, SUMMARY, ESTIMATED, TASK_MODE, FLAG1-20…) store their **value** in their entry's bit; for
+value fields the bit appears to mark the field as populated. Verified on three Project-written files
+(entry order differs per file — Project reorders the field map — and the bits follow the entries:
+e.g. NAME was entry 100 with bit 100 set in all files; SUMMARY at entry 10/35 matched summary rows;
+MILESTONE at entry 5/17 matched milestone rows). Because entry order is file-specific, bit positions
+must be derived from the file's own field map, never hard-coded.
+Meta item bytes +0..+4: unknown flags (byte 2 varies per file: 0x0A–0x17 observed); cloned verbatim.
+
+Task record (block 0, 206 bytes in the reference) — key offsets from the field map (file-specific;
+heavily edited files lay these out differently):
+`0 UID, 4 ID, 8 EarlyFinish, 12 LateStart, 24 FreeSlack, 36 ParentUID, 40 OutlineLevel(u16), 42 Duration,
+46 ActualDurationUnits, 48 ActualDuration, 52 RemainingDuration, 56 ConstraintType, 64 Start, 68 Finish,
+72 ActualStart, 80 ConstraintDate, 88 Priority, 94 Type, 98 Created, 106 EarlyStart, 110 LateFinish,
+126 Work(double), 150 Cost(double)`.
+The units word at +46 (ACTUAL_DURATION_UNITS): unit code 3 min / 5 h / 7 d / 9 w / 11 mo, +0x20 =
+estimated (the "?" suffix); summary rows carry 0x15 instead of a unit code.
+Block 1 (64 bytes): `0 GUID, 16 double position, 24 ParentGUID, 50 Start(rollup), 54 Finish(rollup),
+58 ManualDuration, 62 ManualDurationUnits`. Summary/milestone/estimated flags are meta bitmap bits
+(see above), not Fixed2Data bytes.
 Deleted tasks are 16-byte stubs (`UID 0xFFFF0000+n`) kept at the front of the block.
 
 ## Var blocks
@@ -81,9 +108,20 @@ Fixed2Data record 48 bytes: `GUID link, GUID pred, GUID succ`.
 
 ## Verified against Microsoft Project (M365, Sep 2026)
 Container writer, task records, hierarchy, FS links, Props start date and title all open cleanly by double-click.
-Open defect: Project shows every task as "1 day?" — duration at FixedData+42 is written correctly but not honoured;
-suspect a flag in FixedMeta/Fixed2Meta marks the field as set. Being diagnosed by diffing a Project-resaved copy.
+Durations verified correct, including display units (days/weeks), the estimated "?" flag, 0-day milestones and
+working-time summary rollups.
+
+The "every task shows 1 day?" defect had three causes, found by A/B tests in Project:
+1. **Phantom assignments**: the template's TBkndAssn records (one per template task, 1 day of work each) are
+   joined to tasks by task unique id, and Project overrides the task's duration from the assignment. MPXJ
+   ignores them, which is why the MPXJ oracle always read the written durations correctly while Project did
+   not. The writer now empties TBkndAssn.
+2. **Stale record counts** in Props (see table above) made Project drop task records beyond the template's
+   count and load the template's relation/assignment counts.
+3. The units word / estimated flag and the boolean meta-bitmap bits (milestone/summary/estimated) had to be
+   written per task — Project honours them exactly as described above.
 
 ## Not yet handled
-Resources, assignments (phantom per-task records exist in the template and must be regenerated or cleared),
-calendars, notes, custom fields, SummaryInformation title, "next UID" counters in Props, baselines, timephased data.
+Resources, assignments (cleared, not yet writable), calendars, notes, custom fields, SummaryInformation title
+(MPXJ reads the title from there, Project from Props), baselines, timephased data, view scroll position
+(CV_iew — the Gantt opens scrolled to the template's dates).

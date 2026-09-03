@@ -25,7 +25,8 @@ def load_project(path: str) -> Project:
     spec = json.load(open(path, encoding="utf-8"))
     tasks = [Task(uid=t["uid"], name=t["name"], start=_dt(t["start"]), finish=_dt(t["finish"]),
                   duration_days=t.get("duration_days", 1.0), outline_level=t.get("outline_level", 1),
-                  parent_uid=t.get("parent_uid", 0)) for t in spec["tasks"]]
+                  parent_uid=t.get("parent_uid", 0), duration_units=t.get("duration_units", "d"),
+                  estimated=t.get("estimated", False)) for t in spec["tasks"]]
     rels = [Relation(r["pred"], r["succ"], r.get("type", "FS"), r.get("lag_days", 0.0)) for r in spec.get("links", [])]
     return Project(spec["title"], _dt(spec["start"]), tasks, rels)
 
