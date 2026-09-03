@@ -5,3 +5,5 @@ build/
 *.egg-info/
 *.mpp
 .pytest_cache/
+site/
+docs/contributing.md

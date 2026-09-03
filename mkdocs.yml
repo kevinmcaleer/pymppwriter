@@ -1,0 +1,23 @@
+site_name: pymppwriter
+site_description: Write Microsoft Project .mpp files from pure Python
+site_url: https://kevinmcaleer.github.io/pymppwriter/
+repo_url: https://github.com/kevinmcaleer/pymppwriter
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: teal
+      toggle: {icon: material/brightness-7, name: Dark mode}
+    - scheme: slate
+      primary: teal
+      toggle: {icon: material/brightness-4, name: Light mode}
+  features: [navigation.sections, content.code.copy]
+nav:
+  - Home: index.md
+  - Examples: examples.md
+  - MPP format notes: FORMAT_NOTES.md
+  - Contributing: contributing.md
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - tables
