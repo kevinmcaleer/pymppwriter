@@ -10,8 +10,10 @@ MSPDI `.xml` export has to be opened manually from inside Project.
 
 > **Status: alpha.** Task names, hierarchy, dates, durations (values, display units, estimated
 > flags, milestones and summary rollups), dependencies and the project start date are verified
-> to open correctly in Project M365. Resources, assignments, calendars, notes and custom
-> fields are not yet written. Treat this as a working proof-of-concept, not a product.
+> to open correctly in Project M365. Resources (name, initials, email, max units, per-resource
+> calendars) and assignments (units, work, GUID cross-references) are written and verified via
+> MPXJ. Rates/costs, calendar edits, notes and custom fields are not yet written. Treat this
+> as a working proof-of-concept, not a product.
 
 ## How it works
 
@@ -113,6 +115,19 @@ MppWriter("templates/template.mpp").write(project, "robot-build.mpp")
 | `Relation` | `pred_uid`, `succ_uid` | |
 | | `type` | `"FS"` (default), `"SS"`, `"FF"`, `"SF"` |
 | | `lag_days` | may be negative for lead |
+| `Resource` | `uid` | unique, > 0 |
+| | `name`, `initials`, `email` | strings; only `name` is required |
+| | `max_units` | 1.0 = 100% (default) |
+| | `guid` | auto-generated; pass your own to keep GUIDs stable |
+| `Assignment` | `task_uid`, `resource_uid` | must reference existing tasks/resources |
+| | `units` | 1.0 = 100% (default); work is computed from the task's duration |
+
+In JSON specs, resources and assignments look like:
+
+```json
+"resources": [ {"uid": 1, "name": "Kevin", "initials": "K", "max_units": 1.0} ],
+"assignments": [ {"task": 1, "resource": 1, "units": 0.5} ]
+```
 
 Tasks are written in list order, which becomes the ID / row order in Project.
 

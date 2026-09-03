@@ -121,3 +121,85 @@ def test_writer_end_to_end_with_template(tmp_path):
     assert struct.unpack("<I", props[B.PROPS_TASK_RECORD_COUNT])[0] == len(recs)
     assert struct.unpack("<I", props[B.PROPS_ASSN_RECORD_COUNT])[0] == 0
     assert struct.unpack("<I", props[B.PROPS_REL_RECORD_COUNT])[0] == 1
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_resources_and_assignments(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task, Resource, Assignment
+    from pymppwriter.writer import RSC_NATIVE, ASSN_NATIVE, RSC_META_SIZE, ASSN_META_SIZE
+    kev = Resource(1, "Kevin McAleer", initials="KM", email="kev@example.com")
+    bot = Resource(2, "Robot", max_units=2.0)
+    p = Project("t", D(2026, 1, 5, 8),
+                [Task(1, "A", D(2026, 1, 5, 8), D(2026, 1, 6, 17), duration_days=2),
+                 Task(2, "B", D(2026, 1, 7, 8), D(2026, 1, 7, 17), duration_days=1)],
+                resources=[kev, bot],
+                assignments=[Assignment(1, 1), Assignment(2, 2, units=0.5)])
+    w = MppWriter("templates/template.mpp")
+    out = tmp_path / "o.mpp"
+    w.write(p, str(out))
+    ole = olefile.OleFileIO(str(out))
+    r = lambda p_: ole.openstream("   114/" + p_).read()
+
+    # resources: stubs + uid0 + 2 new records, counters match
+    _, props, _ = B.parse_props(r("Props"))
+    mh, mc, mitems = B.parse_fixed_meta(r("TBkndRsc/FixedMeta"), RSC_META_SIZE)
+    recs = B.split_fixed_data(r("TBkndRsc/FixedData"), mitems)
+    full = {struct.unpack_from("<I", rec, 0)[0]: rec for rec in recs if len(rec) > 100}
+    assert set(full) == {0, 1, 2}
+    assert struct.unpack("<I", props[B.PROPS_RESOURCE_RECORD_COUNT])[0] == len(recs)
+    max_units_it = w.rsc_fm[RSC_NATIVE["MAX_UNITS"]]
+    assert struct.unpack_from("<d", full[2], max_units_it.offset)[0] == 20000.0
+    _, vtable, _ = B.parse_var_meta(r("TBkndRsc/VarMeta"))
+    vdata = r("TBkndRsc/Var2Data")
+    assert B.decode_unicode(B.read_var(vdata, vtable[1][RSC_NATIVE["NAME"]])) == "Kevin McAleer"
+    assert B.decode_unicode(B.read_var(vdata, vtable[1][RSC_NATIVE["INITIALS"]])) == "KM"
+    assert RSC_NATIVE["INITIALS"] not in vtable[2]
+
+    # per-resource calendars appended, pointing at the resource
+    cmh, cmc, cmitems = B.parse_fixed_meta(r("TBkndCal/FixedMeta"), 10)
+    crecs = B.split_fixed_data(r("TBkndCal/FixedData"), cmitems)
+    uc, bc, rc = w.cal_cols
+    rsc_cals = {struct.unpack("<3i", rec)[rc]: struct.unpack("<3i", rec)
+                for rec in crecs if len(rec) == 12}
+    assert 1 in rsc_cals and 2 in rsc_cals
+    assert rsc_cals[1][bc] == w.cal_standard_uid
+
+    # assignments: 2 records with GUID cross-references and scaled units/work
+    amh, amc, amitems = B.parse_fixed_meta(r("TBkndAssn/FixedMeta"), ASSN_META_SIZE)
+    arecs = B.split_fixed_data(r("TBkndAssn/FixedData"), amitems)
+    assert len(arecs) == 2 and struct.unpack("<I", props[B.PROPS_ASSN_RECORD_COUNT])[0] == 2
+    task_it = w.assn_fm[ASSN_NATIVE["TASK_UNIQUE_ID"]]
+    rsc_it = w.assn_fm[ASSN_NATIVE["RESOURCE_UNIQUE_ID"]]
+    units_it = w.assn_fm[ASSN_NATIVE["UNITS"]]
+    work_it = w.assn_fm[ASSN_NATIVE["WORK"]]
+    assert struct.unpack_from("<I", arecs[0], task_it.offset)[0] == 1
+    assert struct.unpack_from("<i", arecs[0], rsc_it.offset)[0] == 1
+    assert struct.unpack_from("<d", arecs[1], units_it.offset)[0] == 5000.0
+    assert struct.unpack_from("<d", arecs[1], work_it.offset)[0] == 4800 * 100.0 * 0.5
+    am2d = r("TBkndAssn/Fixed2Meta")
+    am2n = struct.unpack_from("<I", am2d, 8)[0]
+    am2items = B.parse_fixed_meta(am2d, (len(am2d) - 16) // am2n)[2]
+    arecs2 = B.split_fixed_data(r("TBkndAssn/Fixed2Data"), am2items)
+    tg = w.assn_fm[ASSN_NATIVE["TASK_GUID"]]
+    rg = w.assn_fm[ASSN_NATIVE["RESOURCE_GUID"]]
+    assert arecs2[0][tg.offset:tg.offset + 16] == p.tasks[0].guid
+    assert arecs2[0][rg.offset:rg.offset + 16] == kev.guid
+    assert arecs2[1][rg.offset:rg.offset + 16] == bot.guid
+    # planned-work contour blob: Project schedules the assignment from this
+    _, avt, _ = B.parse_var_meta(r("TBkndAssn/VarMeta"))
+    avd = r("TBkndAssn/Var2Data")
+    blob = B.read_var(avd, avt[2][ASSN_NATIVE["PLANNED_WORK_DATA"]])
+    assert struct.unpack_from("<d", blob, 8)[0] == 0.5 * 10000.0 * 16     # units * 16
+    assert struct.unpack_from("<d", blob, 16)[0] == 4800 * 100.0 * 0.5   # work, milli-min
+    assert struct.unpack_from("<I", blob, 24)[0] == 4800 * 8             # elapsed tenths * 8
+    # assigned tasks carry the work rollup (milli-minutes)
+    work_it = w.task_fm[2]  # ACTUAL_WORK id 2 is at +134; WORK id 0 at +126
+    work_off = w.task_fm[0].offset
+    trecs = B.split_fixed_data(r("TBkndTask/FixedData"),
+                               B.parse_fixed_meta(r("TBkndTask/FixedMeta"), 47)[2])
+    tw = {struct.unpack_from("<I", rec, 0)[0]: struct.unpack_from("<d", rec, work_off)[0]
+          for rec in trecs if len(rec) > 100}
+    assert tw[1] == 9600 * 100.0                  # 2 days at 100%
+    assert tw[2] == 4800 * 100.0 * 0.5            # 1 day at 50%
+    assert tw[0] == tw[1] + tw[2]                 # project summary rollup
