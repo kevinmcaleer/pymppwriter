@@ -100,6 +100,87 @@ def test_build_calendar_data_blob():
     assert blob[-6:] == b"\0" * 6                                 # pad + closing bytes
 
 
+def test_rtf_notes_and_advance_working():
+    from datetime import datetime as D
+    from pymppwriter.writer import encode_rtf_notes, advance_working
+    rtf = encode_rtf_notes("a {b}\nc\\d é")
+    assert rtf.startswith(b"{\\rtf1\\ansi")
+    assert b"a \\{b\\}\\par c\\\\d \\u233?" in rtf
+    assert advance_working(D(2026, 9, 7, 8), 2400) == D(2026, 9, 7, 12)      # 4h -> noon
+    assert advance_working(D(2026, 9, 7, 8), 4800) == D(2026, 9, 7, 17)      # full day
+    assert advance_working(D(2026, 9, 7, 8), 7200) == D(2026, 9, 8, 12)      # 1.5 days
+    assert advance_working(D(2026, 9, 4, 13), 4800) == D(2026, 9, 7, 12)     # Fri pm + Mon am
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_task_fields(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task
+    from pymppwriter.writer import (NATIVE, TEXT_IDS, NUMBER_IDS, DATE_IDS, FLAG_IDS,
+                                    CONSTRAINT_TYPES)
+    t1 = Task(1, "A", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2,
+              notes="hello\nworld", wbs="X.1", constraint="SNET",
+              constraint_date=D(2026, 9, 7, 8), deadline=D(2026, 9, 30, 17),
+              percent_complete=50, priority=700, task_type="fixed_duration",
+              effort_driven=True, text={1: "T1", 30: "T30"}, number={2: 42.5},
+              date={1: D(2026, 12, 25, 8)}, flag={3: True})
+    t2 = Task(2, "B", D(2026, 9, 9, 8), D(2026, 9, 9, 17), manual=True)
+    p = Project("t", D(2026, 9, 7, 8), [t1, t2])
+    w = MppWriter("templates/template.mpp")
+    out = tmp_path / "o.mpp"
+    w.write(p, str(out))
+    ole = olefile.OleFileIO(str(out))
+    r = lambda s: ole.openstream("   114/TBkndTask/" + s).read()
+    mh, mc, mitems = B.parse_fixed_meta_auto(r("FixedMeta"), 47)
+    recs = B.split_fixed_data(r("FixedData"), mitems)
+    m2h, m2c, m2items = B.parse_fixed_meta_auto(r("Fixed2Meta"), 92)
+    recs2 = B.split_fixed_data(r("Fixed2Data"), m2items)
+    rows = {}
+    for i, rec in enumerate(recs):
+        if len(rec) > 100:
+            uid_it = w.task_fm[NATIVE["UNIQUE_ID"]]
+            rows[struct.unpack_from("<I", rec, uid_it.offset)[0]] = i
+    def fx(uid, name, fmt):
+        it = w.task_fm[NATIVE[name]]
+        src = recs[rows[uid]] if it.block == 0 else recs2[rows[uid]]
+        return struct.unpack_from(fmt, src, it.offset)[0]
+    def ts(uid, name):
+        it = w.task_fm[NATIVE[name]]
+        src = recs[rows[uid]] if it.block == 0 else recs2[rows[uid]]
+        return B.decode_timestamp(src, it.offset)
+    def bit(uid, native_id):
+        i = rows[uid]
+        return B.meta_bit(mitems[i], m2items[i], w.task_bit[native_id])
+    # constraint, deadline, priority, type, effort-driven
+    assert fx(1, "CONSTRAINT_TYPE", "<H") == CONSTRAINT_TYPES["SNET"]
+    assert ts(1, "CONSTRAINT_DATE") == D(2026, 9, 7, 8)
+    assert ts(1, "DEADLINE") == D(2026, 9, 30, 17)
+    assert fx(1, "PRIORITY", "<H") == 700
+    assert fx(1, "TYPE", "<H") == 1
+    assert bit(1, NATIVE["EFFORT_DRIVEN"]) == 1 and bit(2, NATIVE["EFFORT_DRIVEN"]) == 0
+    # percent complete: 50% of 2 days
+    assert fx(1, "PERCENT_COMPLETE", "<H") == 50
+    assert fx(1, "ACTUAL_DURATION", "<i") == 4800
+    assert fx(1, "REMAINING_DURATION", "<i") == 4800
+    assert ts(1, "ACTUAL_START") == D(2026, 9, 7, 8)
+    assert ts(1, "STOP") == D(2026, 9, 7, 17)
+    # manual scheduling on task 2
+    assert bit(2, NATIVE["MANUALLY_SCHEDULED"]) == 1 and bit(1, NATIVE["MANUALLY_SCHEDULED"]) == 0
+    assert fx(2, "MANUAL_DURATION", "<i") == 4800
+    assert ts(2, "MANUAL_START") == D(2026, 9, 9, 8)
+    # var data: notes, wbs, custom text/number/date; flags as meta bits
+    _, vt, _ = B.parse_var_meta(r("VarMeta"))
+    vd = r("Var2Data")
+    assert B.read_var(vd, vt[1][NATIVE["NOTES"]]).startswith(b"{\\rtf1")
+    assert B.decode_unicode(B.read_var(vd, vt[1][NATIVE["WBS"]])) == "X.1"
+    assert B.decode_unicode(B.read_var(vd, vt[1][TEXT_IDS[0]])) == "T1"
+    assert B.decode_unicode(B.read_var(vd, vt[1][TEXT_IDS[29]])) == "T30"
+    assert struct.unpack("<d", B.read_var(vd, vt[1][NUMBER_IDS[1]]))[0] == 42.5
+    assert B.decode_timestamp(B.read_var(vd, vt[1][DATE_IDS[0]]), 0) == D(2026, 12, 25, 8)
+    assert bit(1, FLAG_IDS[2]) == 1 and bit(2, FLAG_IDS[2]) == 0
+    assert NATIVE["NOTES"] not in vt[2]
+
+
 def test_meta_bitmap_set_and_get_across_blocks():
     meta, meta2 = bytearray(47), bytearray(92)
     for idx in (0, 10, 311, 312, 400):

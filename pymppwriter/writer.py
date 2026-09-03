@@ -29,15 +29,31 @@ NATIVE = {"UNIQUE_ID": 86, "ID": 23, "NAME": 14, "START": 35, "FINISH": 36, "DUR
           "MILESTONE": 24, "SUMMARY": 92, "ESTIMATED": 396, "ACTUAL_DURATION_UNITS": 181,
           "TASK_MODE": 1280, "WORK": 0, "REMAINING_WORK": 4, "CALENDAR_UNIQUE_ID": 401,
           "MANUAL_START": 1283, "MANUAL_FINISH": 1284, "MANUAL_DURATION": 1288,
-          "MANUALLY_SCHEDULED": 1408}   # the flag M365 actually reads; 1280 stays set either way
+          "MANUAL_DURATION_UNITS": 1289,
+          "MANUALLY_SCHEDULED": 1408,   # the flag M365 actually reads; 1280 stays set either way
+          "NOTES": 15, "WBS": 16, "CONSTRAINT_TYPE": 17, "CONSTRAINT_DATE": 18, "DEADLINE": 437,
+          "PERCENT_COMPLETE": 32, "PERCENT_WORK_COMPLETE": 33, "ACTUAL_START": 41,
+          "ACTUAL_FINISH": 42, "ACTUAL_DURATION": 28, "ACTUAL_WORK": 2, "STOP": 100,
+          "RESUME": 99, "PRIORITY": 25, "TYPE": 128, "EFFORT_DRIVEN": 132}
+# custom field native ids, index 0 = Text1/Number1/Date1/Flag1
+TEXT_IDS = [51, 54, 57, 60, 63, 66, 67, 68, 69, 70, 317, 318, 319, 320, 321,
+            322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336]
+NUMBER_IDS = [87, 88, 89, 90, 91, 302, 303, 304, 305, 306, 307, 308, 309, 310,
+              311, 312, 313, 314, 315, 316]
+DATE_IDS = [265, 266, 267, 268, 269, 270, 271, 272, 273, 274]
+FLAG_IDS = [72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 292, 293, 294, 295, 296,
+            297, 298, 299, 300, 301]
+CONSTRAINT_TYPES = {"ASAP": 0, "ALAP": 1, "MSO": 2, "MFO": 3,
+                    "SNET": 4, "SNLT": 5, "FNET": 6, "FNLT": 7}
+TASK_TYPES = {"fixed_units": 0, "fixed_duration": 1, "fixed_work": 2}
 CAL_NAME_VAR, CAL_DATA_VAR = 1, 8
 RSC_NATIVE = {"UNIQUE_ID": 27, "ID": 0, "NAME": 1, "INITIALS": 2, "EMAIL_ADDRESS": 35,
               "MAX_UNITS": 4, "CALENDAR_UID": 56, "GUID": 728, "CALENDAR_GUID": 729,
               "POSITION": 730}
 ASSN_NATIVE = {"UNIQUE_ID": 0, "TASK_UNIQUE_ID": 1, "RESOURCE_UNIQUE_ID": 2, "START": 20,
                "FINISH": 21, "RESUME": 24, "STOP": 264, "UNITS": 7, "WORK": 8,
-               "REGULAR_WORK": 11, "REMAINING_WORK": 12, "GUID": 636, "TASK_GUID": 637,
-               "RESOURCE_GUID": 638, "CREATED": 634, "PLANNED_WORK_DATA": 49}
+               "ACTUAL_WORK": 10, "REGULAR_WORK": 11, "REMAINING_WORK": 12, "GUID": 636,
+               "TASK_GUID": 637, "RESOURCE_GUID": 638, "CREATED": 634, "PLANNED_WORK_DATA": 49}
 REL_TYPES = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
 PCT_SCALE = 10000.0            # resource max units / assignment units: 10000.0 = 100%
 WORK_SCALE = 100.0             # work doubles are minutes*1000 = duration tenths * 100
@@ -67,6 +83,41 @@ def working_tenths(start: datetime, finish: datetime, pattern=None) -> int:
     return total
 
 
+def encode_rtf_notes(text: str) -> bytes:
+    """Wrap plain text in the minimal RTF envelope Project writes for notes."""
+    out = []
+    for ch in text:
+        if ch in "\\{}":
+            out.append("\\" + ch)
+        elif ch == "\n":
+            out.append("\\par ")
+        elif ord(ch) > 127:
+            out.append(f"\\u{ord(ch)}?")
+        else:
+            out.append(ch)
+    return ("{\\rtf1\\ansi\\ansicpg1252\\deff0\\nouicompat\\deflang1033"
+            "{\\fonttbl{\\f0\\fnil\\fcharset0 Segoe UI;}}\\viewkind4\\uc1 "
+            "\\pard\\f0\\fs20 " + "".join(out) + "}").encode("ascii")
+
+
+def advance_working(start: datetime, tenths: int, pattern=None) -> datetime:
+    """The datetime reached after `tenths` of working time from `start`."""
+    windows, nonworking = pattern if pattern else ({wd: WORK_WINDOWS for wd in range(5)}, frozenset())
+    minutes = tenths // 10
+    day, point = start.date(), start.hour * 60 + start.minute
+    for _ in range(36600):
+        if day not in nonworking:
+            for w0, w1 in windows.get(day.weekday(), ()):
+                lo = max(w0, point) if day == start.date() else w0
+                if w1 > lo:
+                    if minutes <= w1 - lo:
+                        m = lo + minutes
+                        return datetime(day.year, day.month, day.day, m // 60, m % 60)
+                    minutes -= w1 - lo
+        day += timedelta(days=1)
+    return start
+
+
 @dataclass
 class Task:
     uid: int
@@ -79,6 +130,20 @@ class Task:
     duration_units: str = "d"      # display units: m, h, d, w, mo
     estimated: bool = False        # True shows the duration with a trailing "?"
     calendar: Optional[str] = None     # name of a Project.calendars entry
+    notes: str = ""                # plain text, stored as RTF
+    wbs: Optional[str] = None      # custom WBS code; None = Project derives outline numbers
+    constraint: Optional[str] = None   # ASAP ALAP MSO MFO SNET SNLT FNET FNLT
+    constraint_date: Optional[datetime] = None
+    deadline: Optional[datetime] = None
+    percent_complete: int = 0
+    priority: int = 500            # 0-1000, 500 = normal
+    task_type: str = "fixed_units"     # fixed_units | fixed_duration | fixed_work
+    effort_driven: bool = False
+    manual: bool = False           # manually scheduled
+    text: Dict[int, str] = field(default_factory=dict)       # Text1-30
+    number: Dict[int, float] = field(default_factory=dict)   # Number1-20
+    date: Dict[int, datetime] = field(default_factory=dict)  # Date1-10
+    flag: Dict[int, bool] = field(default_factory=dict)      # Flag1-20
     guid: bytes = field(default_factory=lambda: uuid.uuid4().bytes_le)
 
 
@@ -429,6 +494,30 @@ class MppWriter:
         for t in sorted(project.tasks, key=depth, reverse=True):
             wsum[t.uid] = direct_work.get(t.uid, 0.0) + sum(wsum[k.uid] for k in children.get(t.uid, []))
 
+        # field validation + percent-complete rollup (summaries weighted by duration)
+        pct_eff: Dict[int, int] = {}
+        for t in sorted(project.tasks, key=depth, reverse=True):
+            if t.constraint is not None and t.constraint not in CONSTRAINT_TYPES:
+                raise ValueError(f"task {t.uid}: unknown constraint {t.constraint!r}")
+            if t.task_type not in TASK_TYPES:
+                raise ValueError(f"task {t.uid}: unknown task_type {t.task_type!r}")
+            if not 0 <= t.percent_complete <= 100:
+                raise ValueError(f"task {t.uid}: percent_complete out of range")
+            for label, d, limit in (("text", t.text, 30), ("number", t.number, 20),
+                                    ("date", t.date, 10), ("flag", t.flag, 20)):
+                for n in d:
+                    if not 1 <= n <= limit:
+                        raise ValueError(f"task {t.uid}: {label}{n} out of range 1..{limit}")
+            kids = children.get(t.uid)
+            if kids:
+                tot = sum(eff[k.uid][2] for k in kids)
+                pct_eff[t.uid] = int(round(sum(eff[k.uid][2] * pct_eff[k.uid] for k in kids) / tot)) if tot else 0
+            else:
+                pct_eff[t.uid] = int(t.percent_complete)
+        top_tot = sum(eff[t.uid][2] for t in project.tasks if t.parent_uid == 0)
+        pct0 = int(round(sum(eff[t.uid][2] * pct_eff[t.uid] for t in project.tasks
+                             if t.parent_uid == 0) / top_tot)) if top_tot else 0
+
         # project summary task (uid 0) spans all tasks
         p_start = min([eff[t.uid][0] for t in project.tasks] or [project.start])
         p_finish = max([eff[t.uid][1] for t in project.tasks] or [project.start])
@@ -493,7 +582,7 @@ class MppWriter:
         def emit(proto: dict, uid: int, tid: int, name: str, start, finish, dur_tenths: int,
                  level: int, parent_uid: int, guid: bytes, parent_guid: bytes, is_summary: bool,
                  position: int, units: str = "d", estimated: bool = False, work: float = 0.0,
-                 cal_uid: Optional[int] = None):
+                 cal_uid: Optional[int] = None, task: Optional[Task] = None, pct: int = 0):
             rec = bytearray(proto["rec"]); rec2 = bytearray(proto["rec2"])
             self._put(rec, "UNIQUE_ID", "<I", uid)
             self._put(rec, "ID", "<I", tid)
@@ -519,24 +608,82 @@ class MppWriter:
             self._put_bit(m, m2, "SUMMARY", is_summary)
             self._put_bit(m, m2, "MILESTONE", not is_summary and dur_tenths == 0)
             self._put_bit(m, m2, "ESTIMATED", estimated)
-            # written tasks are auto-scheduled; M365 templates default to manual
-            self._put_bit(m, m2, "MANUALLY_SCHEDULED", False)
-            self._putf_ts(self.task_fm, NATIVE, rec, rec2, "MANUAL_START", None)
-            self._putf_ts(self.task_fm, NATIVE, rec, rec2, "MANUAL_FINISH", None)
-            self._putf(self.task_fm, NATIVE, rec, rec2, "MANUAL_DURATION", "<i", -1)
+            # tasks are auto-scheduled unless asked; M365 templates default to manual
+            manual = task.manual if task is not None else False
+            self._put_bit(m, m2, "MANUALLY_SCHEDULED", manual)
+            if manual:
+                self._putf_ts(self.task_fm, NATIVE, rec, rec2, "MANUAL_START", start)
+                self._putf_ts(self.task_fm, NATIVE, rec, rec2, "MANUAL_FINISH", finish)
+                self._putf(self.task_fm, NATIVE, rec, rec2, "MANUAL_DURATION", "<i", dur_tenths)
+                self._putf(self.task_fm, NATIVE, rec, rec2, "MANUAL_DURATION_UNITS", "<H",
+                           UNITS_CODES[units])
+            else:
+                self._putf_ts(self.task_fm, NATIVE, rec, rec2, "MANUAL_START", None)
+                self._putf_ts(self.task_fm, NATIVE, rec, rec2, "MANUAL_FINISH", None)
+                self._putf(self.task_fm, NATIVE, rec, rec2, "MANUAL_DURATION", "<i", -1)
             if cal_uid is not None:
                 self._put(rec, "CALENDAR_UNIQUE_ID", "<i", cal_uid)
                 self._put_bit(m, m2, "CALENDAR_UNIQUE_ID", True)
+            if task is not None:
+                if task.constraint is not None:
+                    self._put(rec, "CONSTRAINT_TYPE", "<H", CONSTRAINT_TYPES[task.constraint])
+                    self._put_ts(rec, "CONSTRAINT_DATE", task.constraint_date)
+                    self._put_bit(m, m2, "CONSTRAINT_TYPE", True)
+                if task.deadline is not None:
+                    self._put_ts(rec, "DEADLINE", task.deadline)
+                    self._put_bit(m, m2, "DEADLINE", True)
+                self._put(rec, "PRIORITY", "<H", task.priority)
+                self._put(rec, "TYPE", "<H", TASK_TYPES[task.task_type])
+                self._put_bit(m, m2, "EFFORT_DRIVEN", task.effort_driven)
+            if pct:
+                actdur = int(round(dur_tenths * pct / 100))
+                self._put(rec, "PERCENT_COMPLETE", "<H", pct)
+                self._put(rec, "PERCENT_WORK_COMPLETE", "<H", pct)
+                self._put(rec, "ACTUAL_DURATION", "<i", actdur)
+                self._put(rec, "REMAINING_DURATION", "<i", dur_tenths - actdur)
+                self._put(rec, "ACTUAL_WORK", "<d", work * pct / 100.0)
+                self._put(rec, "REMAINING_WORK", "<d", work * (100 - pct) / 100.0)
+                self._put_ts(rec, "ACTUAL_START", start)
+                point = finish if pct == 100 else advance_working(start, actdur, pattern)
+                if pct == 100:
+                    self._put_ts(rec, "ACTUAL_FINISH", finish)
+                self._put_ts(rec, "STOP", point)
+                self._put_ts(rec, "RESUME", point)
+                for f in ("PERCENT_COMPLETE", "ACTUAL_START", "ACTUAL_DURATION"):
+                    self._put_bit(m, m2, f, True)
+            extra_vars = []
+            if task is not None:
+                if task.notes:
+                    extra_vars.append((NATIVE["NOTES"], encode_rtf_notes(task.notes)))
+                if task.wbs is not None:
+                    extra_vars.append((NATIVE["WBS"], B.encode_unicode(task.wbs)))
+                for n, v in sorted(task.text.items()):
+                    extra_vars.append((TEXT_IDS[n - 1], B.encode_unicode(v)))
+                for n, v in sorted(task.number.items()):
+                    extra_vars.append((NUMBER_IDS[n - 1], struct.pack("<d", float(v))))
+                for n, v in sorted(task.date.items()):
+                    extra_vars.append((DATE_IDS[n - 1], B.encode_timestamp(v)))
+                for n, v in sorted(task.flag.items()):
+                    fbit = self.task_bit.get(FLAG_IDS[n - 1])
+                    if fbit is not None:
+                        B.set_meta_bit(m, m2, fbit, bool(v))
+            for typ, _ in extra_vars:
+                fbit = self.task_bit.get(typ)
+                if fbit is not None:
+                    B.set_meta_bit(m, m2, fbit, True)
+            m[2] += len(extra_vars)            # meta byte 2 counts the record's var entries
             fixed.append(bytes(rec)); fixed2.append(bytes(rec2))
             meta.append(m); meta2.append(m2)
             for typ, payload in proto["var"]:
                 if typ == NATIVE["NAME"]:
                     payload = B.encode_unicode(name)
                 var_entries.append((uid, typ, payload))
+            for typ, payload in extra_vars:
+                var_entries.append((uid, typ, payload))
 
         emit(self.proto["summary"], 0, 0, project.title, p_start, p_finish,
              working_tenths(p_start, p_finish, pattern), 0, 0, summary_guid, b"\0" * 16, True, 1,
-             work=sum(wsum[t.uid] for t in project.tasks if t.parent_uid == 0))
+             work=sum(wsum[t.uid] for t in project.tasks if t.parent_uid == 0), pct=pct0)
         pos = 2
         # tasks in ID (display) order = list order
         for tid, t in enumerate(project.tasks, start=1):
@@ -549,7 +696,7 @@ class MppWriter:
                 task_cal = named_cal_uid[t.calendar]
             emit(self.proto["task"], t.uid, tid, t.name, start, finish, dur_tenths,
                  t.outline_level, t.parent_uid, t.guid, parent_guid, t.uid in children, pos,
-                 t.duration_units, t.estimated, wsum[t.uid], task_cal)
+                 t.duration_units, t.estimated, wsum[t.uid], task_cal, t, pct_eff[t.uid])
             pos += 1
 
         # assemble streams: FixedMeta offset field (bytes 4..8) = record offset in FixedData
@@ -704,6 +851,10 @@ class MppWriter:
             work = dur_tenths * WORK_SCALE * asn.units
             for name in ("WORK", "REGULAR_WORK", "REMAINING_WORK"):
                 put(name, "<d", work)
+            tpct = pct_eff.get(asn.task_uid, 0)
+            if tpct:
+                put("ACTUAL_WORK", "<d", work * tpct / 100.0)
+                put("REMAINING_WORK", "<d", work * (100 - tpct) / 100.0)
             for name in ("START", "RESUME", "STOP"):
                 self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, name, start)
             self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "FINISH", finish)

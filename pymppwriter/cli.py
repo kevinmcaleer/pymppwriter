@@ -47,10 +47,23 @@ def _dt(s: str) -> datetime:
 
 def load_project(path: str) -> Project:
     spec = json.load(open(path, encoding="utf-8"))
-    tasks = [Task(uid=t["uid"], name=t["name"], start=_dt(t["start"]), finish=_dt(t["finish"]),
-                  duration_days=t.get("duration_days", 1.0), outline_level=t.get("outline_level", 1),
-                  parent_uid=t.get("parent_uid", 0), duration_units=t.get("duration_units", "d"),
-                  estimated=t.get("estimated", False), calendar=t.get("calendar")) for t in spec["tasks"]]
+    def _task(t: dict) -> Task:
+        custom = {k: {int(n): v for n, v in t.get(k, {}).items()} for k in ("text", "number", "flag")}
+        dates = {int(n): _dt(v) for n, v in t.get("date", {}).items()}
+        return Task(uid=t["uid"], name=t["name"], start=_dt(t["start"]), finish=_dt(t["finish"]),
+                    duration_days=t.get("duration_days", 1.0), outline_level=t.get("outline_level", 1),
+                    parent_uid=t.get("parent_uid", 0), duration_units=t.get("duration_units", "d"),
+                    estimated=t.get("estimated", False), calendar=t.get("calendar"),
+                    notes=t.get("notes", ""), wbs=t.get("wbs"),
+                    constraint=t.get("constraint"),
+                    constraint_date=_dt(t["constraint_date"]) if "constraint_date" in t else None,
+                    deadline=_dt(t["deadline"]) if "deadline" in t else None,
+                    percent_complete=t.get("percent_complete", 0),
+                    priority=t.get("priority", 500), task_type=t.get("task_type", "fixed_units"),
+                    effort_driven=t.get("effort_driven", False), manual=t.get("manual", False),
+                    text=custom["text"], number=custom["number"], date=dates, flag=custom["flag"])
+
+    tasks = [_task(t) for t in spec["tasks"]]
     rels = [Relation(r["pred"], r["succ"], r.get("type", "FS"), r.get("lag_days", 0.0)) for r in spec.get("links", [])]
     rscs = [Resource(uid=r["uid"], name=r["name"], initials=r.get("initials", ""),
                      email=r.get("email", ""), max_units=r.get("max_units", 1.0))
