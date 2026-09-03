@@ -457,7 +457,7 @@ class MppWriter:
                 if row is self.cal_base_row:
                     m = bytearray(row["meta"])
                     m[2] += 1
-                    m[8] |= 0x80
+                    m[8] |= 0xC0   # has-data flag: 0x80 in 2010-era metas, 0x40 in M365
                     cal_rows_out[i] = dict(row, meta=bytes(m))
                     cal_meta_patched = True
         for cal in project.calendars:
@@ -477,7 +477,7 @@ class MppWriter:
             m = bytearray(self.cal_base_row["meta"])
             m[2] = 2 if has_data else 1        # var entry count: name (+ data blob)
             if has_data:
-                m[8] |= 0x80
+                m[8] |= 0xC0   # has-data flag: 0x80 in 2010-era metas, 0x40 in M365
             cal_rows_out.append(dict(rec=bytes(crec), rec2=bytes(crec2),
                                      meta=bytes(m),
                                      meta2=bytearray(self.cal_base_row["meta2"])))
