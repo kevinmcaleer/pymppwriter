@@ -8,6 +8,7 @@ and patching the fields we control.
 from __future__ import annotations
 import struct
 import uuid
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -246,6 +247,37 @@ class Project:
     status_date: Optional[datetime] = None
     currency_symbol: Optional[str] = None     # e.g. "£"; default template's ("$")
     currency_code: Optional[str] = None       # e.g. "GBP"
+
+
+class ScheduleWarning(UserWarning):
+    """A declared date Project's scheduler will not agree with."""
+
+
+def weekly_overlap_minutes(a_pattern, b_pattern) -> int:
+    """Working minutes a normal week has in common between two work patterns."""
+    (a_windows, _), (b_windows, _) = a_pattern, b_pattern
+    total = 0
+    for wd in range(7):
+        for a0, a1 in a_windows.get(wd, ()):
+            for b0, b1 in b_windows.get(wd, ()):
+                total += max(0, min(a1, b1) - max(a0, b0))
+    return total
+
+
+def link_driven_start(rel: Relation, pred_eff, succ_dur_tenths: int, pattern):
+    """Where a relation puts its successor's start, or None if it does not
+    drive the start (FF and SF constrain the finish instead)."""
+    p_start, p_finish = pred_eff[0], pred_eff[1]
+    lag = int(round(rel.lag_days * TENTHS_PER_DAY))
+    if rel.type == "FS":
+        # a zero-duration successor sits on the predecessor's finish; anything
+        # longer starts at the next working moment after it
+        if lag == 0 and succ_dur_tenths == 0:
+            return p_finish
+        return advance_working(p_finish, lag, pattern)
+    if rel.type == "SS":
+        return advance_working(p_start, lag, pattern) if lag else p_start
+    return None
 
 
 def validate(project: Project) -> None:
@@ -554,6 +586,44 @@ class MppWriter:
             else:
                 eff[t.uid] = (t.start, t.finish, int(round(t.duration_days * TENTHS_PER_DAY)))
 
+        # earliest start each task's predecessors imply, so we only pin dates
+        # the links do not already produce (Project's own files constrain
+        # typed-in dates, not link-driven ones)
+        link_start: Dict[int, datetime] = {}
+        for rel in project.relations:
+            if rel.pred_uid not in eff or rel.succ_uid not in eff:
+                continue
+            s = link_driven_start(rel, eff[rel.pred_uid], eff[rel.succ_uid][2], pattern)
+            if s is None:
+                continue                  # FF/SF do not drive the start directly
+            prev = link_start.get(rel.succ_uid)
+            if prev is None or s > prev:
+                link_start[rel.succ_uid] = s
+        # Project cannot put a resource to work on a task whose own calendar
+        # shares no working time with the resource's: it drops the resource
+        # calendar and pops "Not enough common working time" on open
+        named_cals = {c.name: c for c in project.calendars}
+        assigned = {a.task_uid for a in project.assignments}
+        for t in project.tasks:
+            cal = named_cals.get(t.calendar) if t.calendar else None
+            if cal is not None and t.uid in assigned and not weekly_overlap_minutes(
+                    _work_pattern(cal), pattern):
+                warnings.warn(f"task {t.uid} {t.name!r} is on calendar {cal.name!r}, which shares "
+                              f"no working time with the resource calendars; Project will schedule "
+                              f"it ignoring the resource calendar", ScheduleWarning, stacklevel=2)
+
+        # a declared start earlier than the links allow is one Project will
+        # move on its next recalculation: warn rather than write a schedule
+        # that will not survive a round trip
+        for uid, implied in link_start.items():
+            task = by_uid[uid]
+            if task.manual or children.get(uid) or task.calendar is not None:
+                continue                  # manual, summary and other-calendar tasks differ
+            if eff[uid][0] < implied:
+                warnings.warn(f"task {uid} {task.name!r} starts {eff[uid][0]:%Y-%m-%d %H:%M} but "
+                              f"its predecessors put it at {implied:%Y-%m-%d %H:%M}; "
+                              f"Project will move it", ScheduleWarning, stacklevel=2)
+
         # assignment work per task (milli-minutes), rolled up into summaries
         for asn in project.assignments:
             if asn.task_uid not in by_uid:
@@ -699,10 +769,11 @@ class MppWriter:
             if task is not None:
                 constraint, cdate = task.constraint, task.constraint_date
                 if (constraint is None and not manual and not is_summary
-                        and start > project.start):
+                        and start > project.start and link_start.get(uid) != start):
                     # hold the declared start against the scheduling engine, the
                     # way Project itself pins a typed-in start date (otherwise an
-                    # ASAP task snaps back to its earliest date on recalculation)
+                    # ASAP task snaps back to its earliest date on recalculation);
+                    # tasks their predecessors already place stay ASAP
                     constraint, cdate = "SNET", start
                 if constraint is not None:
                     self._put(rec, "CONSTRAINT_TYPE", "<H", CONSTRAINT_TYPES[constraint])
