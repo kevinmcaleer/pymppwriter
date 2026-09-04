@@ -66,6 +66,78 @@ export const ASSN_NATIVE: Record<string, number> = {
 };
 export const REL_TYPES: Record<string, number> = { FF: 0, FS: 1, SF: 2, SS: 3 };
 
+/**
+ * Baseline field ids, slot 0 (the unnumbered Baseline) then Baseline1-10.
+ *
+ * Baselines live in **var data**, not the fixed record fields, which stay
+ * empty in files Project writes. The task stride is irregular — slot 6 jumps
+ * from 526 to 544 — so the ids are tabulated rather than computed.
+ */
+export const TASK_BASELINE_IDS = [
+  { start: 43, finish: 44, duration: 27, units: 179, work: 1, cost: 6 },
+  { start: 482, finish: 483, duration: 487, units: 488, work: 485, cost: 484 },
+  { start: 493, finish: 494, duration: 498, units: 499, work: 496, cost: 495 },
+  { start: 504, finish: 505, duration: 509, units: 510, work: 507, cost: 506 },
+  { start: 515, finish: 516, duration: 520, units: 521, work: 518, cost: 517 },
+  { start: 526, finish: 527, duration: 531, units: 532, work: 529, cost: 528 },
+  { start: 544, finish: 545, duration: 549, units: 550, work: 547, cost: 546 },
+  { start: 555, finish: 556, duration: 560, units: 561, work: 558, cost: 557 },
+  { start: 566, finish: 567, duration: 571, units: 572, work: 569, cost: 568 },
+  { start: 577, finish: 578, duration: 582, units: 583, work: 580, cost: 579 },
+  { start: 588, finish: 589, duration: 593, units: 594, work: 591, cost: 590 },
+];
+/** Assignments record the same snapshot without a duration; stride 9. */
+export const ASSN_BASELINE_IDS = [
+  { start: 146, finish: 147, work: 16, cost: 32 },
+  { start: 295, finish: 296, work: 289, cost: 290 },
+  { start: 304, finish: 305, work: 298, cost: 299 },
+  { start: 313, finish: 314, work: 307, cost: 308 },
+  { start: 322, finish: 323, work: 316, cost: 317 },
+  { start: 331, finish: 332, work: 325, cost: 326 },
+  { start: 340, finish: 341, work: 334, cost: 335 },
+  { start: 349, finish: 350, work: 343, cost: 344 },
+  { start: 358, finish: 359, work: 352, cost: 353 },
+  { start: 367, finish: 368, work: 361, cost: 362 },
+  { start: 376, finish: 377, work: 370, cost: 371 },
+];
+/**
+ * Resources carry baseline work and cost only — Project writes no baseline
+ * start or finish for a resource. Slot 0 is 15/17; the numbered slots step by
+ * 10, a stride the field map shows through its own gaps (344-349, 354-359).
+ */
+export const RSC_BASELINE_IDS = [
+  { work: 15, cost: 17 },
+  ...Array.from({ length: 10 }, (_, n) => ({ work: 342 + 10 * n, cost: 343 + 10 * n })),
+];
+/**
+ * Deliverable dates and budget work/cost: Project writes them alongside every
+ * baseline, always unset — NA dates and its own "no value" double. Only slots
+ * 0 and 1 are evidenced by a Project-written file and these are placeholders
+ * either way, so the tables stop where the evidence does.
+ */
+export const TASK_BASELINE_EXTRAS = [
+  { deliverableStart: 1174, deliverableFinish: 1175, budgetWork: 1176, budgetCost: 1177 },
+  { deliverableStart: 1180, deliverableFinish: 1181, budgetWork: 1182, budgetCost: 1183 },
+];
+export const RSC_BASELINE_BUDGET = [{ work: 756, cost: 757 }, { work: 760, cost: 761 }];
+export const ASSN_BASELINE_BUDGET = [{ work: 673, cost: 674 }, { work: 677, cost: 678 }];
+export const BASELINE_UNSET_DOUBLE = Uint8Array.from(
+  "8dedb5a0f7c6b0be".match(/../g)!.map((h) => parseInt(h, 16)),
+);
+/**
+ * Timephased baseline blobs (work, cost), removed when a baseline is cleared.
+ * We do not write them, matching the Python implementation: Project resaved a
+ * file that had none and did not add them, and the baseline columns, the "last
+ * saved on" menu entry and the variance columns are all correct without them.
+ * They carry the *spread* of baseline work over time, which only the usage
+ * views show.
+ */
+export const TASK_BASELINE_TIMEPHASED = [173, 174];
+export const RSC_BASELINE_TIMEPHASED = [68, 69];
+export const ASSN_BASELINE_TIMEPHASED = [52, 53];
+/** When the baseline was set; NA when cleared. */
+export const PROPS_BASELINE_SAVED = 37753749; // 0x2401395
+
 /** An assignment row for a task with nobody assigned. */
 export const NULL_RESOURCE_UID = -65535;
 export const NULL_RESOURCE_GUID = Uint8Array.from(
@@ -121,6 +193,18 @@ export interface Task {
   flag?: Record<number, boolean>;
   /** Pass your own to keep GUIDs stable between exports. */
   guid?: Uint8Array;
+  /** Saved schedule snapshots by slot; 0 = Baseline, 1-10 = Baseline1-10. */
+  baselines?: Record<number, Baseline>;
+}
+
+/** One saved snapshot. Resources carry only work and cost, assignments no duration. */
+export interface Baseline {
+  start?: Date;
+  finish?: Date;
+  durationDays?: number;
+  workHours?: number;
+  /** The file's own units; scale not yet established. */
+  cost?: number;
 }
 
 export interface Relation {
@@ -158,6 +242,8 @@ export interface Resource {
   /** 1.0 = 100%. */
   maxUnits?: number;
   guid?: Uint8Array;
+  /** Work and cost only — Project stores no dates on a resource baseline. */
+  baselines?: Record<number, Baseline>;
 }
 
 export interface Assignment {
@@ -165,6 +251,8 @@ export interface Assignment {
   resourceUid: number;
   /** 1.0 = 100%. */
   units?: number;
+  /** Start, finish and work — no duration. */
+  baselines?: Record<number, Baseline>;
 }
 
 export interface Project {
@@ -367,6 +455,144 @@ export function linkDrivenStart(
     return succDurTenths === 0 ? s : nextWorkingMoment(s, pattern);
   }
   return null;
+}
+
+// ------------------------------------------------------------- baselines --
+
+export interface EffectiveSchedule {
+  byUid: Map<number, Task>;
+  children: Map<number, Task[]>;
+  deepestFirst: Task[];
+  pattern: WorkPattern;
+  /** uid -> the schedule the file will describe, summaries rolled up. */
+  eff: Map<number, { start: Date; finish: Date; tenths: number }>;
+}
+
+/**
+ * The schedule a project actually writes, with summaries rolled up from their
+ * children in working time, deepest first so nesting works. Shared by the
+ * writer and setBaseline() so a baseline records exactly the schedule the file
+ * will describe.
+ */
+export function effectiveSchedule(project: Project): EffectiveSchedule {
+  const tasks = project.tasks;
+  const byUid = new Map<number, Task>(tasks.map((t) => [t.uid, t]));
+  const children = new Map<number, Task[]>();
+  for (const t of tasks) {
+    const p = t.parentUid ?? 0;
+    const list = children.get(p) ?? [];
+    list.push(t);
+    children.set(p, list);
+  }
+
+  const depth = (t: Task): number => {
+    let d = 0;
+    let p = t.parentUid ?? 0;
+    const seen = new Set<number>();
+    while (byUid.has(p) && !seen.has(p)) {
+      seen.add(p);
+      d += 1;
+      p = byUid.get(p)!.parentUid ?? 0;
+    }
+    return d;
+  };
+  const deepestFirst = [...tasks].sort((a, b) => depth(b) - depth(a));
+
+  const pattern = workPattern(project.calendar ?? null);
+  const eff = new Map<number, { start: Date; finish: Date; tenths: number }>();
+  for (const t of deepestFirst) {
+    const kids = children.get(t.uid);
+    if (kids?.length) {
+      const start = new Date(Math.min(...kids.map((k) => eff.get(k.uid)!.start.getTime())));
+      const finish = new Date(Math.max(...kids.map((k) => eff.get(k.uid)!.finish.getTime())));
+      eff.set(t.uid, { start, finish, tenths: workingTenths(start, finish, pattern) });
+    } else {
+      eff.set(t.uid, {
+        start: t.start,
+        finish: t.finish,
+        tenths: Math.round((t.durationDays ?? 1) * TENTHS_PER_DAY),
+      });
+    }
+  }
+  return { byUid, children, deepestFirst, pattern, eff };
+}
+
+const round4 = (x: number) => Math.round(x * 10_000) / 10_000;
+
+/**
+ * Save the current schedule into baseline `slot` (0 = Baseline, 1-10).
+ *
+ * Records what Project records: start, finish, duration and work per task,
+ * with summaries spanning their children and work rolled up from assignments.
+ * Assignments get the same snapshot without a duration, and resources get the
+ * work and cost their assignments add up to — the only baseline fields Project
+ * writes on a resource. The writer emits these as var data, and stamps the
+ * save date in Props.
+ */
+export function setBaseline(project: Project, slot = 0): void {
+  if (!Number.isInteger(slot) || slot < 0 || slot > 10) {
+    throw new Error(`baseline slot must be 0-10 (got ${slot})`);
+  }
+  const { children, deepestFirst, eff } = effectiveSchedule(project);
+  const assignments = project.assignments ?? [];
+  const directWork = new Map<number, number>();
+  for (const asn of assignments) {
+    const e = eff.get(asn.taskUid);
+    if (!e) continue;
+    directWork.set(
+      asn.taskUid,
+      (directWork.get(asn.taskUid) ?? 0) + e.tenths * WORK_SCALE * (asn.units ?? 1),
+    );
+  }
+  const wsum = new Map<number, number>();
+  for (const t of deepestFirst) {
+    const kids = children.get(t.uid) ?? [];
+    wsum.set(t.uid, (directWork.get(t.uid) ?? 0) + kids.reduce((s, k) => s + wsum.get(k.uid)!, 0));
+  }
+  for (const t of project.tasks) {
+    const e = eff.get(t.uid)!;
+    t.baselines = t.baselines ?? {};
+    t.baselines[slot] = {
+      start: e.start,
+      finish: e.finish,
+      durationDays: round4(e.tenths / TENTHS_PER_DAY),
+      workHours: round4(wsum.get(t.uid)! / (WORK_SCALE * 600)),
+    };
+  }
+  const perResource = new Map<number, number>();
+  for (const asn of assignments) {
+    const e = eff.get(asn.taskUid);
+    if (!e) continue;
+    const hours = round4((e.tenths * (asn.units ?? 1)) / 600);
+    asn.baselines = asn.baselines ?? {};
+    asn.baselines[slot] = { start: e.start, finish: e.finish, workHours: hours };
+    perResource.set(asn.resourceUid, (perResource.get(asn.resourceUid) ?? 0) + hours);
+  }
+  for (const res of project.resources ?? []) {
+    res.baselines = res.baselines ?? {};
+    res.baselines[slot] = { workHours: round4(perResource.get(res.uid) ?? 0) };
+  }
+}
+
+/**
+ * Drop baseline `slot`. Project keeps the entries and blanks them; the writer
+ * does the same, so a cleared slot reads back as absent.
+ */
+export function clearBaseline(project: Project, slot = 0): void {
+  if (!Number.isInteger(slot) || slot < 0 || slot > 10) {
+    throw new Error(`baseline slot must be 0-10 (got ${slot})`);
+  }
+  const holders = [...project.tasks, ...(project.resources ?? []), ...(project.assignments ?? [])];
+  for (const h of holders) {
+    if (h.baselines) delete h.baselines[slot];
+  }
+}
+
+/** The slots a project has saved, on any entity, in order. */
+export function baselineSlots(project: Project): number[] {
+  const slots = new Set<number>();
+  for (const t of project.tasks) for (const s of Object.keys(t.baselines ?? {})) slots.add(Number(s));
+  return [...slots].sort((a, b) => a - b);
 }
 
 // ------------------------------------------------------------------ notes --

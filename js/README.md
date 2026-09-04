@@ -45,6 +45,28 @@ Pass `newGuid` and `now` to make output reproducible, and `onWarning` to catch t
 Microsoft Project accepts but silently changes (a start earlier than its links allow, a start in
 non-working time, a task calendar sharing no working time with its resources').
 
+## Baselines
+
+```ts
+import { setBaseline, clearBaseline } from "mppwriter";
+
+setBaseline(project);          // slot 0, the unnumbered Baseline
+setBaseline(project, 3);       // Baseline3
+clearBaseline(project, 0);
+```
+
+Saves the current schedule into one of the eleven slots, across all three entity classes:
+
+| on a | baseline records |
+|---|---|
+| task | start, finish, duration and work, with summaries spanning their children |
+| assignment | start, finish and work — the task's schedule scaled by the assignment's units |
+| resource | work and cost, added up from its assignments (Project stores no dates here) |
+
+They come back from `readProject()` as `task.baselines`, `resource.baselines` and
+`assignment.baselines`, each keyed by slot. The timephased baseline blobs that Project uses only for
+the usage views are not written — see `docs/FORMAT_NOTES.md` in the repository for why.
+
 ## Reading a plan back
 
 ```ts
@@ -58,8 +80,9 @@ for (const task of project.tasks) {
 
 `readProject()` returns the same shape `build()` takes, so a file can be read, edited and written
 again. Every offset comes from the file's own field maps, so it reads what any Project of that era
-wrote, not just what this library produced. Baselines, costs and timephased data are not returned —
-the writer does not model them either. A file that is not an MPP14 project throws `MppReadError`.
+wrote, not just what this library produced. Baselines come back on tasks, resources and assignments;
+costs and timephased data are not returned, as the writer does not model them either. A file that is
+not an MPP14 project throws `MppReadError`.
 
 ## The container
 

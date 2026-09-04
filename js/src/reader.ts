@@ -7,16 +7,18 @@
  * reads correctly — there are no hard-coded record layouts to go stale.
  *
  * What comes back is the same `Project` the writer takes, so a file can be
- * read, edited and written again. Fields the writer does not model (baselines,
- * costs, timephased data) are not returned.
+ * read, edited and written again. Baselines come back on tasks, resources and
+ * assignments; fields the writer does not model (costs, timephased data) do
+ * not.
  */
 import { Storage, readCfb } from "./cfb.ts";
 import * as B from "./blocks.ts";
 import {
-  ASSN_META_SIZE, ASSN_NATIVE, CONSTRAINT_TYPES, ESTIMATED_FLAG, NATIVE, PCT_SCALE, PRJ,
-  REL_META_SIZE, REL_TYPES, RSC_META_SIZE, RSC_NATIVE, TASK_META2_SIZE, TASK_META_SIZE,
-  TENTHS_PER_DAY, UNITS_CODES, decodeRtfNotes,
-  type Assignment, type Project, type Relation, type Resource, type Task,
+  ASSN_BASELINE_IDS, ASSN_META_SIZE, ASSN_NATIVE, CONSTRAINT_TYPES, ESTIMATED_FLAG, NATIVE,
+  PCT_SCALE, PRJ, REL_META_SIZE, REL_TYPES, RSC_BASELINE_IDS, RSC_META_SIZE, RSC_NATIVE,
+  TASK_BASELINE_IDS, TASK_META2_SIZE, TASK_META_SIZE,
+  TENTHS_PER_DAY, UNITS_CODES, WORK_SCALE, decodeRtfNotes,
+  type Assignment, type Baseline, type Project, type Relation, type Resource, type Task,
 } from "./model.ts";
 
 /** The file is not a project we can read. */
@@ -176,6 +178,8 @@ export function readProject(bytes: Uint8Array): Project {
       priority: tasksK.value(i, NATIVE["PRIORITY"]!, "u16") || 500,
       manual: tasksK.flag(i, NATIVE["MANUALLY_SCHEDULED"]!),
     };
+    const baselines = readTaskBaselines(tasksK, uid);
+    if (Object.keys(baselines).length) task.baselines = baselines;
     if (wbs) task.wbs = wbs;
     if (constraint && constraint !== "ASAP") task.constraint = constraint;
     const cdate = tasksK.timestamp(i, NATIVE["CONSTRAINT_DATE"]!);
@@ -191,13 +195,16 @@ export function readProject(bytes: Uint8Array): Project {
     const name = rscK.text(uid, RSC_NATIVE["NAME"]!);
     if (!name) return;
     const maxUnits = rscK.value(i, RSC_NATIVE["MAX_UNITS"]!, "f64");
-    resources.push({
+    const res: Resource = {
       uid,
       name,
       initials: rscK.text(uid, RSC_NATIVE["INITIALS"]!),
       email: rscK.text(uid, RSC_NATIVE["EMAIL_ADDRESS"]!),
       maxUnits: round4((maxUnits ?? PCT_SCALE) / PCT_SCALE),
-    });
+    };
+    const rbl = readRscBaselines(rscK, uid);
+    if (Object.keys(rbl).length) res.baselines = rbl;
+    resources.push(res);
   });
 
   const assignments: Assignment[] = [];
@@ -206,7 +213,15 @@ export function readProject(bytes: Uint8Array): Project {
     const rscUid = assnK.value(i, ASSN_NATIVE["RESOURCE_UNIQUE_ID"]!, "i32");
     if (!taskUid || rscUid === null || rscUid <= 0) return;
     const units = assnK.value(i, ASSN_NATIVE["UNITS"]!, "f64");
-    assignments.push({ taskUid, resourceUid: rscUid, units: round4((units ?? PCT_SCALE) / PCT_SCALE) });
+    const asn: Assignment = {
+      taskUid,
+      resourceUid: rscUid,
+      units: round4((units ?? PCT_SCALE) / PCT_SCALE),
+    };
+    const auid = assnK.value(i, ASSN_NATIVE["UNIQUE_ID"]!, "u32");
+    const abl = auid ? readAssnBaselines(assnK, auid) : {};
+    if (Object.keys(abl).length) asn.baselines = abl;
+    assignments.push(asn);
   });
 
   const relations = readRelations(r);
@@ -224,6 +239,85 @@ export function readProject(bytes: Uint8Array): Project {
     resources,
     assignments,
   };
+}
+
+/** One little-endian double, or null when the entry is absent or unset. */
+function readDouble(raw: Uint8Array | null): number | null {
+  if (!raw || raw.length < 8) return null;
+  const value = dv(raw).getFloat64(0, true);
+  return value === -1e-6 ? null : value; // Project's "no value" double
+}
+
+/**
+ * Saved baselines for one task, by slot.
+ *
+ * They live in var data — the fixed baseline fields stay empty in files
+ * Project writes — and a cleared baseline keeps its entries with the dates at
+ * NA and the numbers at zero, so those are skipped.
+ */
+function readTaskBaselines(k: Klass, uid: number): Record<number, Baseline> {
+  const out: Record<number, Baseline> = {};
+  TASK_BASELINE_IDS.forEach((ids, slot) => {
+    const startRaw = k.var(uid, ids.start);
+    const finishRaw = k.var(uid, ids.finish);
+    if (!startRaw && !finishRaw) return;
+    const b: Baseline = {};
+    const start = startRaw ? B.decodeTimestamp(startRaw, 0) : null;
+    const finish = finishRaw ? B.decodeTimestamp(finishRaw, 0) : null;
+    if (start) b.start = start;
+    if (finish) b.finish = finish;
+    const dur = k.var(uid, ids.duration);
+    b.durationDays = dur && dur.length >= 4 ? round4(dv(dur).getInt32(0, true) / TENTHS_PER_DAY) : 0;
+    b.workHours = round4((readDouble(k.var(uid, ids.work)) ?? 0) / (WORK_SCALE * 600));
+    b.cost = readDouble(k.var(uid, ids.cost)) ?? 0;
+    // a cleared slot, not a saved one
+    if (!b.start && !b.finish && !b.durationDays && !b.workHours) return;
+    out[slot] = b;
+  });
+  return out;
+}
+
+/**
+ * Saved baselines for one resource, by slot — work and cost only.
+ *
+ * Project writes no baseline start or finish on a resource, and clearing a
+ * slot leaves the two numbers at zero rather than removing them. A resource
+ * with nothing assigned therefore looks exactly like a cleared slot, so an
+ * all-zero entry is not reported; that ambiguity is in the format.
+ */
+function readRscBaselines(k: Klass, uid: number): Record<number, Baseline> {
+  const out: Record<number, Baseline> = {};
+  RSC_BASELINE_IDS.forEach((ids, slot) => {
+    const work = readDouble(k.var(uid, ids.work));
+    const cost = readDouble(k.var(uid, ids.cost));
+    if (!work && !cost) return;
+    out[slot] = { workHours: round4((work ?? 0) / (WORK_SCALE * 600)), cost: cost ?? 0 };
+  });
+  return out;
+}
+
+/**
+ * Saved baselines for one assignment, by slot — no duration. A cleared slot
+ * keeps its entries with the dates at NA and the work at zero, the same
+ * convention tasks use.
+ */
+function readAssnBaselines(k: Klass, uid: number): Record<number, Baseline> {
+  const out: Record<number, Baseline> = {};
+  ASSN_BASELINE_IDS.forEach((ids, slot) => {
+    const startRaw = k.var(uid, ids.start);
+    const finishRaw = k.var(uid, ids.finish);
+    if (!startRaw && !finishRaw) return;
+    const b: Baseline = {};
+    const start = startRaw ? B.decodeTimestamp(startRaw, 0) : null;
+    const finish = finishRaw ? B.decodeTimestamp(finishRaw, 0) : null;
+    if (start) b.start = start;
+    if (finish) b.finish = finish;
+    b.workHours = round4((readDouble(k.var(uid, ids.work)) ?? 0) / (WORK_SCALE * 600));
+    b.cost = readDouble(k.var(uid, ids.cost)) ?? 0;
+    if (!b.start && !b.finish && !b.workHours) return; // a cleared slot
+    out[slot] = b;
+  });
+  return out;
 }
 
 /**

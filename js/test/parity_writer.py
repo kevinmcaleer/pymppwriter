@@ -9,7 +9,8 @@ from datetime import date, datetime as D
 
 sys.path.insert(0, sys.argv[1])          # the repo root
 from pymppwriter import (MppWriter, Project, Task, Relation, Resource,       # noqa: E402
-                         Assignment, Calendar, CalendarException)
+                         Assignment, Calendar, CalendarException, set_baseline,
+                         clear_baseline)
 
 template, out = sys.argv[2], sys.argv[3]
 
@@ -56,6 +57,13 @@ project = Project("Parity build", D(2027, 3, 1, 8), tasks, rels,
                   comments="Written twice", manager="Kev", company="Kev's Robots",
                   category="Build", status_date=D(2027, 3, 8, 17),
                   currency_symbol="£", currency_code="GBP")
+
+# baselines on tasks, resources and assignments: slot 0 and a numbered slot,
+# plus a slot set then cleared so the cleared-entry shape is compared too
+set_baseline(project)
+set_baseline(project, 4)
+set_baseline(project, 7)
+clear_baseline(project, 7)
 
 counter = iter(range(1, 1000))
 writer = MppWriter(template,

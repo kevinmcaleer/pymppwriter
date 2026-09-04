@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   workPattern, workingTenths, advanceWorking, nextWorkingMoment, previousWorkingMoment,
   weeklyOverlapMinutes, linkDrivenStart, encodeRtfNotes, decodeRtfNotes, validate,
+  setBaseline, clearBaseline,
   type Project, type Calendar,
 } from "../src/model.ts";
 
@@ -98,4 +99,55 @@ test("the validator handles chains deeper than a recursive walk would", () => {
   const p = { title: "p", start: D(2026, 1, 5), tasks, relations } as Project;
   validate(p); // no stack overflow
   assert.throws(() => validate({ ...p, relations: [...relations, { predUid: n, succUid: 1 }] }), /cycle/);
+});
+
+
+test("setBaseline captures the schedule across all three entity classes", () => {
+  const project: Project = {
+    title: "b",
+    start: D(2027, 4, 5, 8),
+    tasks: [
+      { uid: 1, name: "Phase", start: D(2027, 4, 5, 8), finish: D(2027, 4, 9, 17), outlineLevel: 1 },
+      { uid: 2, name: "Design", start: D(2027, 4, 5, 8), finish: D(2027, 4, 6, 17), durationDays: 2,
+        outlineLevel: 2, parentUid: 1 },
+      { uid: 3, name: "Build", start: D(2027, 4, 7, 8), finish: D(2027, 4, 9, 17), durationDays: 3,
+        outlineLevel: 2, parentUid: 1 },
+    ],
+    resources: [{ uid: 1, name: "Kevin" }, { uid: 2, name: "Ada" }, { uid: 3, name: "Idle" }],
+    assignments: [{ taskUid: 2, resourceUid: 1 }, { taskUid: 3, resourceUid: 2, units: 0.5 }],
+  };
+  setBaseline(project);
+
+  const byUid = new Map(project.tasks.map((t) => [t.uid, t]));
+  assert.equal(byUid.get(2)!.baselines![0]!.durationDays, 2);
+  assert.equal(byUid.get(2)!.baselines![0]!.workHours, 16); // one resource on a 2-day task
+  const summary = byUid.get(1)!.baselines![0]!; // spans its children
+  assert.equal(iso(summary.start!), iso(D(2027, 4, 5, 8)));
+  assert.equal(iso(summary.finish!), iso(D(2027, 4, 9, 17)));
+  assert.equal(summary.durationDays, 5);
+  assert.equal(summary.workHours, 28); // 16 + 12
+
+  const rsc = new Map(project.resources!.map((r) => [r.uid, r]));
+  assert.equal(rsc.get(1)!.baselines![0]!.workHours, 16); // a 2-day task at 100%
+  assert.equal(rsc.get(2)!.baselines![0]!.workHours, 12); // a 3-day task at 50%
+  assert.equal(rsc.get(3)!.baselines![0]!.workHours, 0); // nothing assigned
+  assert.equal(rsc.get(1)!.baselines![0]!.start, undefined,
+    "Project stores no dates on a resource baseline");
+
+  const [a1, a2] = project.assignments!;
+  assert.equal(iso(a1!.baselines![0]!.start!), iso(D(2027, 4, 5, 8)));
+  assert.equal(a1!.baselines![0]!.workHours, 16);
+  assert.equal(a2!.baselines![0]!.workHours, 12);
+
+  setBaseline(project, 4);
+  assert.deepEqual(Object.keys(rsc.get(1)!.baselines!), ["0", "4"]);
+  clearBaseline(project, 0); // clears all three classes
+  assert.deepEqual(Object.keys(rsc.get(1)!.baselines!), ["4"]);
+  assert.deepEqual(Object.keys(a1!.baselines!), ["4"]);
+  assert.deepEqual(Object.keys(byUid.get(2)!.baselines!), ["4"]);
+
+  for (const bad of [-1, 11]) {
+    assert.throws(() => setBaseline(project, bad), /0-10/);
+    assert.throws(() => clearBaseline(project, bad), /0-10/);
+  }
 });
