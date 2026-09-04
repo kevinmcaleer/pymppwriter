@@ -1,5 +1,6 @@
 from .writer import (MppWriter, Project, Task, Relation, Resource, Assignment,
-                     Calendar, CalendarException, ScheduleWarning, validate)
+                     Calendar, CalendarException, ScheduleWarning, validate,
+                     Baseline, set_baseline, clear_baseline)
 from .reader import read_project, MppReadError
 
 try:                                    # the installed distribution's version
@@ -9,4 +10,5 @@ except (ImportError, PackageNotFoundError):     # running from a source tree
     __version__ = "0.0.0.dev0"
 __all__ = ["MppWriter", "Project", "Task", "Relation", "Resource", "Assignment",
            "Calendar", "CalendarException", "ScheduleWarning", "validate",
+           "Baseline", "set_baseline", "clear_baseline",
            "read_project", "MppReadError", "__version__"]

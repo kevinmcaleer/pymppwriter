@@ -12,8 +12,8 @@ versions.
         print(task.uid, task.name, task.duration_days)
 
 What comes back is the same `Project` the writer consumes, so a file can be
-read, edited and written again. Fields the writer does not model (baselines,
-costs, timephased data) are not returned.
+read, edited and written again. Baselines come back on tasks, resources and
+assignments; fields the writer does not model (costs, timephased data) do not.
 """
 from __future__ import annotations
 import struct
@@ -23,7 +23,8 @@ from typing import Dict, List, Optional
 from .cfb import load_cfb
 from . import blocks as B
 from .writer import (PRJ, NATIVE, RSC_NATIVE, ASSN_NATIVE, REL_TYPES, CONSTRAINT_TYPES,
-                     TASK_BASELINE_IDS, Baseline, WORK_SCALE,
+                     TASK_BASELINE_IDS, RSC_BASELINE_IDS, ASSN_BASELINE_IDS,
+                     Baseline, WORK_SCALE,
                      TASK_META_SIZE, TASK_META2_SIZE, REL_META_SIZE, RSC_META_SIZE,
                      ASSN_META_SIZE, TENTHS_PER_DAY, UNITS_CODES, PCT_SCALE,
                      ESTIMATED_FLAG, Project, Task, Relation, Resource, Assignment,
@@ -192,6 +193,7 @@ def read_project(path: str) -> Project:
             initials=rsc_k.text(uid, RSC_NATIVE["INITIALS"]),
             email=rsc_k.text(uid, RSC_NATIVE["EMAIL_ADDRESS"]),
             max_units=round((max_units or PCT_SCALE) / PCT_SCALE, 4),
+            baselines=_read_rsc_baselines(rsc_k, uid),
         ))
 
     assignments: List[Assignment] = []
@@ -201,10 +203,12 @@ def read_project(path: str) -> Project:
         if not task_uid or rsc_uid is None or rsc_uid <= 0:
             continue
         units = assn_k.value(i, ASSN_NATIVE["UNITS"], "<d")
+        auid = assn_k.value(i, ASSN_NATIVE["UNIQUE_ID"], "<I")
         assignments.append(Assignment(
             task_uid=task_uid,
             resource_uid=rsc_uid,
             units=round((units or PCT_SCALE) / PCT_SCALE, 4),
+            baselines=_read_assn_baselines(assn_k, auid) if auid else {},
         ))
 
     relations = _read_relations(r)
@@ -253,6 +257,55 @@ def _read_baselines(tasks_k: _Klass, uid: int) -> Dict[int, Baseline]:
             continue                     # a cleared slot, not a saved one
         out[slot] = b
     return out
+
+
+def _read_rsc_baselines(rsc_k: _Klass, uid: int) -> Dict[int, Baseline]:
+    """Saved baselines for one resource, by slot — work and cost only.
+
+    Project writes no baseline start or finish on a resource, and clearing a
+    slot leaves the two numbers at zero rather than removing them. A resource
+    with nothing assigned therefore looks exactly like a cleared slot, so an
+    all-zero entry is not reported; that ambiguity is in the format.
+    """
+    out: Dict[int, Baseline] = {}
+    for slot, ids in enumerate(RSC_BASELINE_IDS):
+        work = _double(rsc_k.var(uid, ids["work"]))
+        cost = _double(rsc_k.var(uid, ids["cost"]))
+        if not work and not cost:
+            continue
+        out[slot] = Baseline(work_hours=round((work or 0.0) / (WORK_SCALE * 600), 4),
+                             cost=cost or 0.0)
+    return out
+
+
+def _read_assn_baselines(assn_k: _Klass, uid: int) -> Dict[int, Baseline]:
+    """Saved baselines for one assignment, by slot — no duration.
+
+    A cleared slot keeps its entries with the dates at NA and the work at zero,
+    the same convention tasks use.
+    """
+    out: Dict[int, Baseline] = {}
+    for slot, ids in enumerate(ASSN_BASELINE_IDS):
+        start = assn_k.var(uid, ids["start"])
+        finish = assn_k.var(uid, ids["finish"])
+        if start is None and finish is None:
+            continue
+        b = Baseline(start=B.decode_timestamp(start, 0) if start else None,
+                     finish=B.decode_timestamp(finish, 0) if finish else None)
+        b.work_hours = round((_double(assn_k.var(uid, ids["work"])) or 0.0) / (WORK_SCALE * 600), 4)
+        b.cost = _double(assn_k.var(uid, ids["cost"])) or 0.0
+        if b.start is None and b.finish is None and not b.work_hours:
+            continue                     # a cleared slot, not a saved one
+        out[slot] = b
+    return out
+
+
+def _double(raw: Optional[bytes]) -> Optional[float]:
+    """One little-endian double, or None when the entry is absent or unset."""
+    if not raw or len(raw) < 8:
+        return None
+    value = struct.unpack("<d", raw[:8])[0]
+    return None if value == -1e-06 else value      # Project's "no value" double
 
 
 def _read_relations(r: _Reader) -> List[Relation]:
