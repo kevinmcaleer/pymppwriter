@@ -592,3 +592,39 @@ def test_writer_large_project_engages_difat(tmp_path):
     ole = olefile.OleFileIO(str(out))
     assert ole.get_size("   114/TBkndTask/Var2Data") > 4_000_000
     assert len(B.parse_fixed_meta_auto(ole.openstream("   114/TBkndTask/FixedMeta").read(), 47)[2]) > 4000
+
+
+def test_previous_working_moment():
+    from datetime import datetime as D
+    from pymppwriter.writer import previous_working_moment, _work_pattern, Calendar
+    assert previous_working_moment(D(2026, 9, 9, 8)) == D(2026, 9, 8, 17)      # Wed 08:00 -> Tue 17:00
+    assert previous_working_moment(D(2026, 9, 7, 8)) == D(2026, 9, 4, 17)      # Mon -> Friday
+    assert previous_working_moment(D(2026, 9, 7, 17)) == D(2026, 9, 7, 17)     # end of a window
+    assert previous_working_moment(D(2026, 9, 7, 12)) == D(2026, 9, 7, 12)     # lunch boundary
+    half = _work_pattern(Calendar(week={2: [(480, 720)]}))                     # Wednesday half day
+    assert previous_working_moment(D(2026, 9, 10, 8), half) == D(2026, 9, 9, 12)
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_replaces_the_templates_progress_mark(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task
+    from pymppwriter.writer import NATIVE
+    p = Project("t", D(2026, 9, 7, 8),
+                [Task(1, "Phase", D(2026, 9, 7, 8), D(2026, 9, 9, 17), outline_level=1),
+                 Task(2, "A", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2,
+                      outline_level=2, parent_uid=1),
+                 Task(3, "B", D(2026, 9, 9, 8), D(2026, 9, 9, 17), outline_level=2, parent_uid=1)])
+    w = MppWriter("templates/template.mpp")
+    out = tmp_path / "o.mpp"
+    w.write(p, str(out))
+    ole = olefile.OleFileIO(str(out))
+    r = lambda s: ole.openstream("   114/TBkndTask/" + s).read()
+    mitems = B.parse_fixed_meta_auto(r("FixedMeta"), 47)[2]
+    recs = B.split_fixed_data(r("FixedData"), mitems)
+    it = w.task_fm[NATIVE["SUMMARY_PROGRESS"]]
+    mark = {struct.unpack_from("<I", rec, 0)[0]: B.decode_timestamp(rec, it.offset)
+            for rec in recs if len(rec) > 100}
+    assert mark[2] == D(2026, 9, 7, 8)      # starts with the project, so no earlier moment
+    assert mark[3] == D(2026, 9, 8, 17)     # the working moment before Wednesday morning
+    assert mark[1] is None and mark[0] is None      # summaries carry no mark
