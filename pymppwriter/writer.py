@@ -55,7 +55,9 @@ RSC_NATIVE = {"UNIQUE_ID": 27, "ID": 0, "NAME": 1, "INITIALS": 2, "EMAIL_ADDRESS
 ASSN_NATIVE = {"UNIQUE_ID": 0, "TASK_UNIQUE_ID": 1, "RESOURCE_UNIQUE_ID": 2, "START": 20,
                "FINISH": 21, "RESUME": 24, "STOP": 264, "UNITS": 7, "WORK": 8,
                "ACTUAL_WORK": 10, "REGULAR_WORK": 11, "REMAINING_WORK": 12, "GUID": 636,
-               "TASK_GUID": 637, "RESOURCE_GUID": 638, "CREATED": 634, "PLANNED_WORK_DATA": 49}
+               "TASK_GUID": 637, "RESOURCE_GUID": 638, "CREATED": 634,
+               "PLANNED_WORK_DATA": 49,      # timephased remaining regular work
+               "ACTUAL_WORK_DATA": 50}       # timephased actual regular work
 REL_TYPES = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
 PCT_SCALE = 10000.0            # resource max units / assignment units: 10000.0 = 100%
 WORK_SCALE = 100.0             # work doubles are minutes*1000 = duration tenths * 100
@@ -1108,11 +1110,29 @@ class MppWriter:
                     # writing work*0.08 here made a 50% assignment display half its
                     # real duration (the two only coincide at 100% units)
                     b2 = bytearray(payload)
-                    struct.pack_into("<d", b2, 8, asn.units * PCT_SCALE * 16)
-                    struct.pack_into("<d", b2, 16, work)
-                    struct.pack_into("<I", b2, 24, dur_tenths * 8)
+                    # the blob holds what is *left* to do: on a finished
+                    # assignment Project empties it and moves the work into the
+                    # actual-work contour below
+                    struct.pack_into("<d", b2, 8, 0.0 if tpct == 100 else asn.units * PCT_SCALE * 16)
+                    struct.pack_into("<d", b2, 16, 0.0 if tpct == 100 else work)
+                    struct.pack_into("<I", b2, 24, 0 if tpct == 100 else dur_tenths * 8)
                     payload = bytes(b2)
                 avar_entries.append((i, typ, payload))
+            if tpct == 100:
+                # timephased actual work, the shape Project writes for a finished
+                # assignment: without it the task's actuals are rolled back on
+                # open (100% complete came back as 99% with a zero duration)
+                blob = bytearray(56)
+                struct.pack_into("<HHI", blob, 0, 1, 24, 36)
+                for off in (8, 44):
+                    struct.pack_into("<d", blob, off, asn.units * PCT_SCALE)
+                for off in (16, 36):
+                    struct.pack_into("<d", blob, off, work)
+                for off in (24, 52):
+                    struct.pack_into("<I", blob, off, dur_tenths * 8)
+                avar_entries.append((i, ASSN_NATIVE["ACTUAL_WORK_DATA"], bytes(blob)))
+                m[2] += 1                  # meta byte 2 counts the record's var entries
+                self._bitf(self.assn_bit, ASSN_NATIVE, m, m2, "ACTUAL_WORK_DATA", True)
         a = f"{PRJ}/TBkndAssn"
         afd, afm = assemble(afixed, ameta)
         afd2, afm2 = assemble(afixed2, ameta2)

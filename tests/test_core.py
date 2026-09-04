@@ -647,3 +647,36 @@ def test_writer_replaces_the_templates_progress_mark(tmp_path):
     assert prior[3] == D(2026, 9, 8, 17)    # the working moment before Wednesday morning
     assert mark[1] is None and mark[0] is None      # summaries carry neither
     assert prior[1] is None and prior[0] is None
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_finished_assignment_moves_work_to_the_actual_contour(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task, Resource, Assignment
+    from pymppwriter.writer import ASSN_NATIVE
+    p = Project("t", D(2026, 9, 7, 8),
+                [Task(1, "done", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2,
+                      percent_complete=100),
+                 Task(2, "half", D(2026, 9, 9, 8), D(2026, 9, 9, 17), percent_complete=50)],
+                resources=[Resource(1, "Kevin")],
+                assignments=[Assignment(1, 1), Assignment(2, 1)])
+    w = MppWriter("templates/template.mpp")
+    out = tmp_path / "o.mpp"
+    w.write(p, str(out))
+    ole = olefile.OleFileIO(str(out))
+    r = lambda s: ole.openstream("   114/TBkndAssn/" + s).read()
+    _, vt, _ = B.parse_var_meta(r("VarMeta"))
+    vd = r("Var2Data")
+    remaining, actual = ASSN_NATIVE["PLANNED_WORK_DATA"], ASSN_NATIVE["ACTUAL_WORK_DATA"]
+    done = B.read_var(vd, vt[1][actual])                    # assignment uid 1 = the finished task
+    assert struct.unpack_from("<HHI", done, 0) == (1, 24, 36)
+    assert struct.unpack_from("<d", done, 8)[0] == 10000.0            # units
+    assert struct.unpack_from("<d", done, 16)[0] == 9600 * 100.0      # 2 days of work
+    assert struct.unpack_from("<I", done, 24)[0] == 9600 * 8
+    assert struct.unpack_from("<d", done, 36)[0] == 9600 * 100.0      # repeated in the tail
+    assert struct.unpack_from("<I", done, 52)[0] == 9600 * 8
+    left = B.read_var(vd, vt[1][remaining])                 # nothing left to do
+    assert struct.unpack_from("<d", left, 16)[0] == 0.0
+    assert struct.unpack_from("<I", left, 24)[0] == 0
+    assert actual not in vt[2]                              # partial progress keeps today's shape
+    assert struct.unpack_from("<d", B.read_var(vd, vt[2][remaining]), 16)[0] == 4800 * 100.0

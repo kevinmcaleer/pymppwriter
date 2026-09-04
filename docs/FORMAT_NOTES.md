@@ -238,11 +238,16 @@ Project M365):
   moment before it in native 1255; 2010-era files map only 387, holding that earlier moment.
   Summary rows carry neither. Cloning the template's values instead put the day the template was
   saved on every row.
-* **an assignment's stop/resume gate the task's actuals.** Project reconciles a task's progress
-  against its assignments: with the assignment's `STOP`/`RESUME` (ids 264/24) left at the task's
-  start, a 100%-complete task came back from a resave at 99% with its duration zeroed and its
-  actual finish cleared. Project's own files put both at the point work has reached — the finish
-  for a completed assignment.
+* **a finished assignment needs the actual-work contour.** Project reconciles a task's progress
+  against its assignments' timephased data, and a 100%-complete task came back from a resave at
+  99% with its duration zeroed and its actual finish cleared. The assignment var entries are a
+  pair: id 49 is *remaining* regular work, id 50 *actual* regular work. We wrote total work into
+  49 and never wrote 50, so Project saw nothing done. On a finished assignment Project empties 49
+  and writes 50 as `<H count=1><H 24><I 36>`, then `+8` units x 10000, `+16` actual work in
+  milli-minutes, `+24` actual duration in tenths x 8, and repeats those three at `+36`, `+44` and
+  `+52` (56 bytes). Partial progress keeps its work in 49 and round-trips already; its 50 blob
+  carries extra segments and is not written yet. The assignment's `STOP`/`RESUME` (ids 264/24)
+  follow the point work has reached, as Project's own files do.
 `scripts/roundtrip_check.py` compares a generated file against a Project-resaved copy through MPXJ
 (tasks, resources, assignments; rows added in Project are allowed) — both findings above came out of
 its first run. The Gantt scroll position is a timestamp inside `214/CV_iew/Var2Data` equal to the
