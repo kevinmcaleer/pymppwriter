@@ -756,3 +756,30 @@ def test_writer_gives_every_leaf_task_an_assignment_row(tmp_path):
     placeholder_uid = next(fld(rec, "UNIQUE_ID") for rec in recs
                            if fld(rec, "RESOURCE_UNIQUE_ID", "<i") == NULL_RESOURCE_UID)
     assert 667 in vt[placeholder_uid] and 665 in vt[placeholder_uid]
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_is_reproducible_with_injected_guids_and_clock(tmp_path):
+    """Same project, same bytes — what the TypeScript parity suite relies on."""
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task, Relation, Resource, Assignment
+
+    def project():
+        return Project("Repro", D(2026, 9, 7, 8),
+                       [Task(1, "A", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2,
+                             guid=bytes(range(16))),
+                        Task(2, "B", D(2026, 9, 9, 8), D(2026, 9, 9, 17),
+                             guid=bytes(range(16, 32)))],
+                       [Relation(1, 2)],
+                       resources=[Resource(1, "Kevin", guid=bytes(range(32, 48)))],
+                       assignments=[Assignment(1, 1)])
+
+    def write(path):
+        counter = iter(range(1, 500))
+        w = MppWriter("templates/template.mpp",
+                      new_guid=lambda: next(counter).to_bytes(16, "little"),
+                      now=lambda: D(2026, 9, 4, 12, 0))
+        w.write(project(), str(path))
+        return path.read_bytes()
+
+    assert write(tmp_path / "a.mpp") == write(tmp_path / "b.mpp")

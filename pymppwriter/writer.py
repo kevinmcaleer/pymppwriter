@@ -415,7 +415,12 @@ def validate(project: Project) -> None:
 
 
 class MppWriter:
-    def __init__(self, template_path: str):
+    def __init__(self, template_path: str, new_guid=None, now=None):
+        """new_guid and now make output reproducible: pass a counter-backed
+        factory and a fixed clock and the same project writes the same bytes,
+        which is how the TypeScript port is checked against this one."""
+        self.new_guid = new_guid or (lambda: uuid.uuid4().bytes_le)
+        self.now = now or (lambda: datetime.now().replace(second=0, microsecond=0))
         self.root = load_cfb(template_path)
         self.prj = self.root.storage_path(PRJ)
         hdr, props, order = B.parse_props(self._get(f"{PRJ}/Props"))
@@ -765,7 +770,7 @@ class MppWriter:
         # project summary task (uid 0) spans all tasks
         p_start = min([eff[t.uid][0] for t in project.tasks] or [project.start])
         p_finish = max([eff[t.uid][1] for t in project.tasks] or [project.start])
-        summary_guid = uuid.uuid4().bytes_le
+        summary_guid = self.new_guid()
 
         # calendars: uids for new base calendars, then rows + var entries.
         # Resource calendars allocated after these, in the resources section.
@@ -842,7 +847,7 @@ class MppWriter:
                 self._put_ts(rec, f, start)
             for f in ("FINISH", "EARLY_FINISH", "LATE_FINISH"):
                 self._put_ts(rec, f, finish)
-            self._put_ts(rec, "CREATED", datetime.now().replace(second=0, microsecond=0))
+            self._put_ts(rec, "CREATED", self.now())
             # progress marks, or the template's own would be cloned onto every
             # row: M365 keeps the task's start in 387 and the working moment
             # before it in 1255; 2010-era files have only 387, holding that
@@ -999,7 +1004,7 @@ class MppWriter:
                 struct.pack_into("<Hi", rec, 14, 7, lag)        # lag units (days), lag
             else:
                 struct.pack_into("<iH", rec, 14, lag, 7)        # lag, lag units (days)
-            rec2[0:16] = uuid.uuid4().bytes_le
+            rec2[0:16] = self.new_guid()
             rec2[16:32] = by_uid[r.pred_uid].guid
             rec2[32:48] = by_uid[r.succ_uid].guid
             rfixed.append(bytes(rec)); rfixed2.append(bytes(rec2))
@@ -1151,7 +1156,7 @@ class MppWriter:
             for name in ("RESUME", "STOP"):
                 self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, name, reached)
             self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "FINISH", finish)
-            self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "GUID", uuid.uuid4().bytes_le)
+            self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "GUID", self.new_guid())
             self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "TASK_GUID", task.guid)
             self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "RESOURCE_GUID",
                              NULL_RESOURCE_GUID if empty else res.guid)
@@ -1162,7 +1167,7 @@ class MppWriter:
             nvars = 0
             for typ, payload in self.assn_proto["var"]:
                 if typ == ASSN_NATIVE["CREATED"]:
-                    payload = B.encode_timestamp(datetime.now().replace(second=0, microsecond=0))
+                    payload = B.encode_timestamp(self.now())
                 elif typ == ASSN_NATIVE["PLANNED_WORK_DATA"] and len(payload) >= 36:
                     # planned-work contour: Project schedules the assignment from this
                     # blob, not from the fixed WORK field (which MPXJ reads).
