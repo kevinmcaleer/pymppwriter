@@ -35,7 +35,8 @@ NATIVE = {"UNIQUE_ID": 86, "ID": 23, "NAME": 14, "START": 35, "FINISH": 36, "DUR
           "NOTES": 15, "WBS": 16, "CONSTRAINT_TYPE": 17, "CONSTRAINT_DATE": 18, "DEADLINE": 437,
           "PERCENT_COMPLETE": 32, "PERCENT_WORK_COMPLETE": 33, "ACTUAL_START": 41,
           "ACTUAL_FINISH": 42, "ACTUAL_DURATION": 28, "ACTUAL_WORK": 2, "STOP": 100,
-          "RESUME": 99, "PRIORITY": 25, "TYPE": 128, "EFFORT_DRIVEN": 132}
+          "RESUME": 99, "PRIORITY": 25, "TYPE": 128, "EFFORT_DRIVEN": 132,
+          "SUMMARY_PROGRESS": 387}
 # custom field native ids, index 0 = Text1/Number1/Date1/Flag1
 TEXT_IDS = [51, 54, 57, 60, 63, 66, 67, 68, 69, 70, 317, 318, 319, 320, 321,
             322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336]
@@ -117,6 +118,22 @@ def advance_working(start: datetime, tenths: int, pattern=None) -> datetime:
                     minutes -= w1 - lo
         day += timedelta(days=1)
     return start
+
+
+def previous_working_moment(point: datetime, pattern=None) -> Optional[datetime]:
+    """The last working instant at or before `point` — where Project puts a
+    task's progress mark (native 387), one working period behind its start."""
+    windows, nonworking = pattern if pattern else ({wd: WORK_WINDOWS for wd in range(5)}, frozenset())
+    day, minute = point.date(), point.hour * 60 + point.minute
+    for _ in range(3700):
+        if day not in nonworking:
+            ends = [w1 for w0, w1 in windows.get(day.weekday(), ())
+                    if day < point.date() or w1 <= minute]
+            if ends:
+                m = max(ends)
+                return datetime(day.year, day.month, day.day, m // 60, m % 60)
+        day -= timedelta(days=1)
+    return None
 
 
 @dataclass
@@ -749,6 +766,14 @@ class MppWriter:
             for f in ("FINISH", "EARLY_FINISH", "LATE_FINISH"):
                 self._put_ts(rec, f, finish)
             self._put_ts(rec, "CREATED", datetime.now().replace(second=0, microsecond=0))
+            # native 387 marks how far the task has been worked through; the
+            # template's own value would otherwise be cloned onto every row
+            if is_summary:
+                self._put_ts(rec, "SUMMARY_PROGRESS", None)
+            else:
+                mark = previous_working_moment(start, pattern)
+                self._put_ts(rec, "SUMMARY_PROGRESS",
+                             max(mark, project.start) if mark else project.start)
             rec2[0:16] = guid                 # task GUID (field map block 1, offset 0)
             struct.pack_into("<d", rec2, 16, float(position))
             rec2[24:40] = parent_guid         # parent task GUID
