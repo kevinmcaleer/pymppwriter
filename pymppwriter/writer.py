@@ -75,14 +75,30 @@ ASSN_BASELINE_IDS = [
     {"start": 367, "finish": 368, "work": 361, "cost": 362},
     {"start": 376, "finish": 377, "work": 370, "cost": 371},
 ]
+# Resources carry baseline work and cost only — Project writes no baseline
+# start or finish for a resource. Slot 0 is 15/17; the numbered slots step by
+# 10, a stride the field map shows through its own gaps (344-349, 354-359, …).
+RSC_BASELINE_IDS = ([{"work": 15, "cost": 17}]
+                    + [{"work": 342 + 10 * n, "cost": 343 + 10 * n} for n in range(10)])
 # deliverable dates and budget work/cost: Project writes them alongside every
 # baseline, always unset — NA dates and its own "no value" double
 TASK_BASELINE_EXTRAS = [
     {"deliverable_start": 1174, "deliverable_finish": 1175, "budget_work": 1176, "budget_cost": 1177},
+    {"deliverable_start": 1180, "deliverable_finish": 1181, "budget_work": 1182, "budget_cost": 1183},
 ]
+# the same unset budget pair on resources and assignments. Only slots 0 and 1
+# are evidenced by a Project-written file and these are placeholders either
+# way, so the tables stop where the evidence does rather than extrapolating.
+RSC_BASELINE_BUDGET = [{"work": 756, "cost": 757}, {"work": 760, "cost": 761}]
+ASSN_BASELINE_BUDGET = [{"work": 673, "cost": 674}, {"work": 677, "cost": 678}]
 BASELINE_UNSET_DOUBLE = bytes.fromhex("8dedb5a0f7c6b0be")
-# timephased baseline blobs, removed when a baseline is cleared
+# Timephased baseline blobs (work, cost), removed when a baseline is cleared.
+# We do not write them: Project resaved a file of ours that had none and did
+# not add them, and the baseline columns, the "last saved on" menu entry and
+# the variance columns are all correct without them. They carry the *spread* of
+# baseline work over time, which only the usage views show — see #63.
 TASK_BASELINE_TIMEPHASED = (173, 174)
+RSC_BASELINE_TIMEPHASED = (68, 69)
 ASSN_BASELINE_TIMEPHASED = (52, 53)
 PROPS_BASELINE_SAVED = 37753749          # 0x2401395: when the baseline was set; NA when cleared
 
@@ -339,6 +355,7 @@ class Resource:
     email: str = ""
     max_units: float = 1.0         # 1.0 = 100%
     guid: bytes = field(default_factory=lambda: uuid.uuid4().bytes_le)
+    baselines: Dict[int, "Baseline"] = field(default_factory=dict)   # work and cost only
 
 
 @dataclass
@@ -346,6 +363,7 @@ class Assignment:
     task_uid: int
     resource_uid: int
     units: float = 1.0             # 1.0 = 100%
+    baselines: Dict[int, "Baseline"] = field(default_factory=dict)   # no duration
 
 
 @dataclass
@@ -504,7 +522,10 @@ def set_baseline(project: Project, slot: int = 0) -> None:
 
     Records what Project records: start, finish, duration and work per task,
     with summaries spanning their children and work rolled up from assignments.
-    The writer emits these as var data, and stamps the save date in Props.
+    Assignments get the same snapshot without a duration, and resources get the
+    work and cost their assignments add up to — the only baseline fields
+    Project writes on a resource. The writer emits these as var data, and
+    stamps the save date in Props.
     """
     if not 0 <= slot <= 10:
         raise ValueError(f"baseline slot must be 0-10 (got {slot})")
@@ -524,6 +545,16 @@ def set_baseline(project: Project, slot: int = 0) -> None:
             duration_days=round(tenths / TENTHS_PER_DAY, 4),
             work_hours=round(wsum[t.uid] / (WORK_SCALE * 600), 4),
         )
+    per_resource: Dict[int, float] = {}
+    for asn in project.assignments:
+        if asn.task_uid not in eff:
+            continue
+        start, finish, tenths = eff[asn.task_uid]
+        hours = round(tenths * asn.units / 600, 4)
+        asn.baselines[slot] = Baseline(start=start, finish=finish, work_hours=hours)
+        per_resource[asn.resource_uid] = per_resource.get(asn.resource_uid, 0.0) + hours
+    for res in project.resources:
+        res.baselines[slot] = Baseline(work_hours=round(per_resource.get(res.uid, 0.0), 4))
 
 
 def clear_baseline(project: Project, slot: int = 0) -> None:
@@ -531,8 +562,8 @@ def clear_baseline(project: Project, slot: int = 0) -> None:
     writer does the same, so a cleared slot reads back as absent."""
     if not 0 <= slot <= 10:
         raise ValueError(f"baseline slot must be 0-10 (got {slot})")
-    for t in project.tasks:
-        t.baselines.pop(slot, None)
+    for holder in (*project.tasks, *project.resources, *project.assignments):
+        holder.baselines.pop(slot, None)
 
 
 class MppWriter:
@@ -1166,8 +1197,18 @@ class MppWriter:
             for idx, res in enumerate(project.resources, start=1):
                 rec = bytearray(self.rsc_proto["rec"]); rec2 = bytearray(self.rsc_proto["rec2"])
                 m = bytearray(self.rsc_proto["meta"]); m2 = bytearray(self.rsc_proto["meta2"])
+                rextra = []
+                for slot, b in sorted(res.baselines.items()):
+                    ids = RSC_BASELINE_IDS[slot]
+                    rextra.append((ids["work"], struct.pack("<d", b.work_hours * 600 * WORK_SCALE)))
+                    rextra.append((ids["cost"], struct.pack("<d", b.cost)))
+                    if slot < len(RSC_BASELINE_BUDGET):   # unset, as Project writes them
+                        bg = RSC_BASELINE_BUDGET[slot]
+                        rextra.append((bg["work"], BASELINE_UNSET_DOUBLE))
+                        rextra.append((bg["cost"], BASELINE_UNSET_DOUBLE))
                 # meta byte 2 counts the record's var entries
-                m[2] = len(self.rsc_proto["var"]) + 1 + bool(res.initials) + bool(res.email)
+                m[2] = (len(self.rsc_proto["var"]) + 1 + bool(res.initials)
+                        + bool(res.email) + len(rextra))
                 cal_uid = next_cal_uid
                 next_cal_uid += 1
                 self._putf(self.rsc_fm, RSC_NATIVE, rec, rec2, "UNIQUE_ID", "<I", res.uid)
@@ -1189,6 +1230,11 @@ class MppWriter:
                     rvar_entries.append((res.uid, RSC_NATIVE["INITIALS"], B.encode_unicode(res.initials)))
                 if res.email:
                     rvar_entries.append((res.uid, RSC_NATIVE["EMAIL_ADDRESS"], B.encode_unicode(res.email)))
+                for typ, payload in rextra:
+                    fbit = self.rsc_bit.get(typ)
+                    if fbit is not None:
+                        B.set_meta_bit(m, m2, fbit, True)
+                    rvar_entries.append((res.uid, typ, payload))
                 # per-resource calendar: (cal uid, base = Standard, resource uid),
                 # calendar GUID = resource GUID, third GUID = Standard calendar's
                 if self.cal_proto is not None:
@@ -1252,13 +1298,16 @@ class MppWriter:
         # Project opening the file on the template's row count until the view was
         # rebuilt — every file this library wrote showed three rows on open.
         assigned = {a.task_uid for a in project.assignments}
-        specs = [(a.task_uid, a.resource_uid, a.units) for a in project.assignments]
-        specs += [(t.uid, NULL_RESOURCE_UID, 1.0) for t in project.tasks
+        specs = [(a.task_uid, a.resource_uid, a.units, a.baselines)
+                 for a in project.assignments]
+        # a placeholder row has no Assignment to carry baselines, so it takes the
+        # task's own — which is what Project writes on these rows
+        specs += [(t.uid, NULL_RESOURCE_UID, 1.0, None) for t in project.tasks
                   if t.uid not in assigned and not children.get(t.uid)]
         if specs and self.assn_proto is None:
             raise ValueError("template has no assignment records to use as a prototype")
         afixed, afixed2, ameta, ameta2, avar_entries = [], [], [], [], []
-        for i, (a_task_uid, a_rsc_uid, a_units) in enumerate(specs, start=1):
+        for i, (a_task_uid, a_rsc_uid, a_units, a_baselines) in enumerate(specs, start=1):
             asn = Assignment(a_task_uid, a_rsc_uid, a_units)
             empty = a_rsc_uid == NULL_RESOURCE_UID
             task = by_uid[asn.task_uid]
@@ -1322,6 +1371,23 @@ class MppWriter:
                     continue
                 avar_entries.append((i, typ, bytes(16)))
                 nvars += 1
+            abl = task.baselines if a_baselines is None else a_baselines
+            for slot, b in sorted(abl.items()):
+                ids = ASSN_BASELINE_IDS[slot]
+                entries = [(ids["start"], B.encode_timestamp(b.start)),
+                           (ids["finish"], B.encode_timestamp(b.finish)),
+                           (ids["work"], struct.pack("<d", b.work_hours * 600 * WORK_SCALE)),
+                           (ids["cost"], struct.pack("<d", b.cost))]
+                if slot < len(ASSN_BASELINE_BUDGET):     # unset, as Project writes them
+                    bg = ASSN_BASELINE_BUDGET[slot]
+                    entries += [(bg["work"], BASELINE_UNSET_DOUBLE),
+                                (bg["cost"], BASELINE_UNSET_DOUBLE)]
+                for typ, payload in entries:
+                    fbit = self.assn_bit.get(typ)
+                    if fbit is not None:
+                        B.set_meta_bit(m, m2, fbit, True)
+                    avar_entries.append((i, typ, payload))
+                    nvars += 1
             m[2] = nvars                             # meta byte 2 counts the record's var entries
         a = f"{PRJ}/TBkndAssn"
         afd, afm = assemble(afixed, ameta)

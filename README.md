@@ -154,8 +154,7 @@ Tasks are written in list order, which becomes the ID / row order in Project.
 ### Baselines
 
 ```python
-from pymppwriter import MppWriter, Project, Task
-from pymppwriter.writer import set_baseline, clear_baseline
+from pymppwriter import MppWriter, Project, Task, set_baseline, clear_baseline
 
 set_baseline(project)            # slot 0, the unnumbered Baseline
 set_baseline(project, 3)         # Baseline3
@@ -163,10 +162,18 @@ clear_baseline(project, 0)
 MppWriter("templates/template.mpp").write(project, "plan.mpp")
 ```
 
-Saves the current schedule — start, finish, duration and work per task, summaries spanning their
-children — into one of the eleven slots, and `read_project()` returns them as `task.baselines`.
-Baselines are stored as variable data, not the fixed record fields, which is what a Project-written
-reference showed; `docs/FORMAT_NOTES.md` has the layout.
+Saves the current schedule into one of the eleven slots, across all three entity classes:
+
+| on a | baseline records |
+|---|---|
+| task | start, finish, duration and work, with summaries spanning their children |
+| assignment | start, finish and work — the task's schedule scaled by the assignment's units |
+| resource | work and cost, added up from its assignments (Project stores no dates here) |
+
+`read_project()` returns them as `task.baselines`, `resource.baselines` and `assignment.baselines`,
+each a `{slot: Baseline}` dict. Baselines are stored as variable data, not the fixed record fields,
+which is what a Project-written reference showed; `docs/FORMAT_NOTES.md` has the layout, and the
+timephased baseline blobs that Project uses only for the usage views are not written.
 
 ### Validation
 

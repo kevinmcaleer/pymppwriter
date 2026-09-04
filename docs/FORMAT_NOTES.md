@@ -266,17 +266,37 @@ Per task, slot 0 (the unnumbered Baseline) is ids 43 start, 44 finish, 27 durati
 duration units, 1 work in milli-minutes, 6 cost, plus deliverable dates (1174/1175) and budget
 work/cost (1176/1177) that Project leaves at NA. Slots 1-10 mirror those at their own ids — 482-492
 for Baseline1 and so on, with an irregular stride (slot 6 jumps from 526 to 544), so the ids are
-tabulated in `writer.py` rather than computed. Assignments carry 146/147 start/finish, 16 work, 32
-cost; resources 15 work and 17 cost.
+tabulated in `writer.py` rather than computed.
+
+Assignments carry the same snapshot without a duration: 146 start, 147 finish, 16 work, 32 cost,
+then a regular stride of 9 for the numbered slots (295/296/289/290 for Baseline1). **Resources carry
+only work and cost** — Project writes no baseline start or finish on a resource — at 15 and 17, with
+a stride of 10 (342/343 for Baseline1). The field map shows that stride in its own gaps: 344-349 and
+354-359 are unused. Every baseline on all three classes also gets an unset budget work/cost pair
+(task 1176/1177, resource 756/757, assignment 673/674, stepping by 4 for the numbered slots).
 
 Alongside every baseline Project also writes deliverable dates (1174/1175, always NA) and budget
 work/cost (1176/1177, its own "no value" double `8dedb5a0f7c6b0be`); this library writes them too, so
 its baseline entries match Project's field for field apart from the timephased pair below.
 
-Two entries per task (173, 174) and two per assignment (52 `RAW_TIMEPHASED_BASELINE_WORK`, 53
-`RAW_TIMEPHASED_BASELINE_COST`) hold the timephased baseline, and they are **the only ones Clear
-Baseline removes**: clearing leaves every scalar entry in place with its dates at NA and its numbers
-at zero. `Props 0x2401395` records when the baseline was saved, and goes back to NA on clear.
+Two entries per task (173, 174), two per resource (68, 69) and two per assignment (52
+`RAW_TIMEPHASED_BASELINE_WORK`, 53 `RAW_TIMEPHASED_BASELINE_COST`) hold the timephased baseline, and
+they are **the only ones Clear Baseline removes**: clearing leaves every scalar entry in place with
+its dates at NA and its numbers at zero. `Props 0x2401395` records when the baseline was saved, and
+goes back to NA on clear.
+
+This library does not write the timephased pair, and that is a deliberate limit rather than an
+omission: Project resaved a file of ours that had none and **did not add them**, while the baseline
+columns, the "last saved on" menu entry and the variance columns were all correct. They hold the
+*spread* of baseline work over time, which only the usage views show.
+
+One baseline-related assignment entry is still unidentified: id 267, eight zero bytes on every row,
+appears when a baseline is set. It is not written here, and Project's resave of a file without it did
+not add it.
+
+Because a resource baseline is two numbers and clearing zeroes them, a resource with nothing assigned
+is indistinguishable from a cleared slot. `read_project()` reports a resource baseline only when it
+is non-zero; the ambiguity is in the format, not the reader.
 
 ### An assignment row per leaf task
 Project keeps one `TBkndAssn` record for **every leaf task**, not just the assigned ones: where nobody

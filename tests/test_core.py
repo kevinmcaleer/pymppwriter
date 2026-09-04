@@ -1,4 +1,4 @@
-import os, struct
+import os, struct, warnings
 import olefile
 import pytest
 from pymppwriter.cfb import Storage, write_cfb, load_cfb, _name_key
@@ -921,3 +921,90 @@ def test_no_baseline_leaves_the_save_date_at_na(tmp_path):
         Project("n", D(2027, 4, 5, 8), [Task(1, "A", D(2027, 4, 5, 8), D(2027, 4, 5, 17))]), str(out))
     _, props, _ = B.parse_props(olefile.OleFileIO(str(out)).openstream("   114/Props").read())
     assert B.decode_timestamp(props[PROPS_BASELINE_SAVED], 0) is None
+
+
+def test_set_baseline_covers_resources_and_assignments():
+    """Resources record work and cost; assignments record dates and work.
+
+    The numbers are the ones Project writes: an assignment's baseline work is
+    the task's duration scaled by units, and a resource's is the sum of its
+    assignments'.
+    """
+    from datetime import datetime as D
+    from pymppwriter import (Project, Task, Resource, Assignment,
+                             set_baseline, clear_baseline)
+    p = Project("b", D(2027, 4, 5, 8),
+                [Task(1, "Design", D(2027, 4, 5, 8), D(2027, 4, 6, 17), duration_days=2),
+                 Task(2, "Build", D(2027, 4, 7, 8), D(2027, 4, 9, 17), duration_days=3)],
+                resources=[Resource(1, "Kevin"), Resource(2, "Ada"), Resource(3, "Idle")],
+                assignments=[Assignment(1, 1), Assignment(2, 2, units=0.5)])
+    set_baseline(p)
+    rsc = {r.uid: r for r in p.resources}
+    assert rsc[1].baselines[0].work_hours == 16.0             # a 2-day task at 100%
+    assert rsc[2].baselines[0].work_hours == 12.0             # a 3-day task at 50%
+    assert rsc[3].baselines[0].work_hours == 0.0              # nothing assigned
+    assert rsc[1].baselines[0].start is None, "Project stores no dates on a resource baseline"
+
+    a1, a2 = p.assignments
+    assert (a1.baselines[0].start, a1.baselines[0].finish) == (D(2027, 4, 5, 8), D(2027, 4, 6, 17))
+    assert a1.baselines[0].work_hours == 16.0
+    assert a2.baselines[0].work_hours == 12.0
+
+    set_baseline(p, 4)
+    assert sorted(rsc[1].baselines) == [0, 4] and sorted(a1.baselines) == [0, 4]
+    clear_baseline(p, 0)                                       # clears all three classes
+    assert sorted(rsc[1].baselines) == [4] and sorted(a1.baselines) == [4]
+    assert sorted(p.tasks[0].baselines) == [4]
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_resource_and_assignment_baselines_round_trip(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import (MppWriter, Project, Task, Resource, Assignment,
+                             set_baseline, clear_baseline, read_project)
+    def build(project, name):
+        out = tmp_path / name
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            MppWriter("templates/template.mpp").write(project, str(out))
+        return read_project(str(out))
+
+    p = Project("b", D(2027, 4, 5, 8),
+                [Task(1, "Design", D(2027, 4, 5, 8), D(2027, 4, 6, 17), duration_days=2),
+                 Task(2, "Build", D(2027, 4, 7, 8), D(2027, 4, 9, 17), duration_days=3)],
+                resources=[Resource(1, "Kevin"), Resource(2, "Ada")],
+                assignments=[Assignment(1, 1), Assignment(2, 2, units=0.5)])
+    set_baseline(p)
+    set_baseline(p, 1)
+
+    back = build(p, "both.mpp")
+    rsc = {r.uid: r for r in back.resources}
+    assert sorted(rsc[1].baselines) == [0, 1]
+    assert rsc[1].baselines[0].work_hours == 16.0 and rsc[2].baselines[0].work_hours == 12.0
+    asn = {(a.task_uid, a.resource_uid): a for a in back.assignments}
+    assert sorted(asn[(1, 1)].baselines) == [0, 1]
+    assert asn[(1, 1)].baselines[0].start == D(2027, 4, 5, 8)
+    assert asn[(2, 2)].baselines[0].work_hours == 12.0
+
+    clear_baseline(p, 0)                       # the cleared slot must not read back
+    back = build(p, "cleared.mpp")
+    assert sorted({r.uid: r for r in back.resources}[1].baselines) == [1]
+    assert sorted({(a.task_uid, a.resource_uid): a
+                   for a in back.assignments}[(1, 1)].baselines) == [1]
+
+
+@pytest.mark.skipif(not os.environ.get("PYMPP_BASELINE_REFERENCE"),
+                    reason="set PYMPP_BASELINE_REFERENCE to a Project-set baseline file")
+def test_resource_and_assignment_baseline_ids_match_project():
+    """The id tables come from a Project-written file, so read one back.
+
+    PYMPP_BASELINE_REFERENCE=~/Downloads/baseline-2-numbered.mpp has both the
+    unnumbered slot and Baseline1 set.
+    """
+    from pymppwriter import read_project
+    project = read_project(os.environ["PYMPP_BASELINE_REFERENCE"])
+    assert any(r.baselines for r in project.resources), "resource baselines should be read"
+    assert any(a.baselines for a in project.assignments), "assignment baselines should be read"
+    for a in project.assignments:
+        for b in a.baselines.values():
+            assert b.start is not None and b.finish is not None and b.finish >= b.start
