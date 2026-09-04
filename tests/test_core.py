@@ -481,7 +481,8 @@ def test_link_driven_start_rules():
     pred = (D(2026, 9, 7, 8), D(2026, 9, 8, 17), 9600)       # Mon 08:00 -> Tue 17:00
     assert link_driven_start(Relation(1, 2), pred, 4800, pat) == D(2026, 9, 9, 8)
     assert link_driven_start(Relation(1, 2), pred, 0, pat) == D(2026, 9, 8, 17)   # milestone
-    assert link_driven_start(Relation(1, 2, lag_days=1.0), pred, 4800, pat) == D(2026, 9, 9, 17)
+    # a day of lag lands on Wednesday 17:00, which is not a start: Project rolls it on
+    assert link_driven_start(Relation(1, 2, lag_days=1.0), pred, 4800, pat) == D(2026, 9, 10, 8)
     assert link_driven_start(Relation(1, 2, type="SS"), pred, 4800, pat) == D(2026, 9, 7, 8)
     assert link_driven_start(Relation(1, 2, type="FF"), pred, 4800, pat) is None
 
@@ -592,3 +593,70 @@ def test_writer_large_project_engages_difat(tmp_path):
     ole = olefile.OleFileIO(str(out))
     assert ole.get_size("   114/TBkndTask/Var2Data") > 4_000_000
     assert len(B.parse_fixed_meta_auto(ole.openstream("   114/TBkndTask/FixedMeta").read(), 47)[2]) > 4000
+
+
+def test_next_working_moment():
+    from datetime import datetime as D
+    from pymppwriter.writer import next_working_moment, _work_pattern, Calendar
+    assert next_working_moment(D(2026, 9, 7, 12)) == D(2026, 9, 7, 13)      # lunch boundary
+    assert next_working_moment(D(2026, 9, 7, 17)) == D(2026, 9, 8, 8)       # end of day
+    assert next_working_moment(D(2026, 9, 7, 9)) == D(2026, 9, 7, 9)        # already working
+    assert next_working_moment(D(2026, 9, 5, 9)) == D(2026, 9, 7, 8)        # Saturday -> Monday
+    half = _work_pattern(Calendar(week={2: [(480, 720)]}))                  # Wednesday half day
+    assert next_working_moment(D(2026, 9, 9, 12), half) == D(2026, 9, 10, 8)
+
+
+def test_previous_working_moment():
+    from datetime import datetime as D
+    from pymppwriter.writer import previous_working_moment, _work_pattern, Calendar
+    assert previous_working_moment(D(2026, 9, 9, 8)) == D(2026, 9, 8, 17)      # Wed 08:00 -> Tue 17:00
+    assert previous_working_moment(D(2026, 9, 7, 8)) == D(2026, 9, 4, 17)      # Mon -> Friday
+    assert previous_working_moment(D(2026, 9, 7, 17)) == D(2026, 9, 7, 17)     # end of a window
+    assert previous_working_moment(D(2026, 9, 7, 12)) == D(2026, 9, 7, 12)     # lunch boundary
+    half = _work_pattern(Calendar(week={2: [(480, 720)]}))                     # Wednesday half day
+    assert previous_working_moment(D(2026, 9, 10, 8), half) == D(2026, 9, 9, 12)
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_replaces_the_templates_progress_mark(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task
+    from pymppwriter.writer import NATIVE
+    p = Project("t", D(2026, 9, 7, 8),
+                [Task(1, "Phase", D(2026, 9, 7, 8), D(2026, 9, 9, 17), outline_level=1),
+                 Task(2, "A", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2,
+                      outline_level=2, parent_uid=1),
+                 Task(3, "B", D(2026, 9, 9, 8), D(2026, 9, 9, 17), outline_level=2, parent_uid=1)])
+    w = MppWriter("templates/template.mpp")
+    out = tmp_path / "o.mpp"
+    w.write(p, str(out))
+    ole = olefile.OleFileIO(str(out))
+    r = lambda s: ole.openstream("   114/TBkndTask/" + s).read()
+    mitems = B.parse_fixed_meta_auto(r("FixedMeta"), 47)[2]
+    recs = B.split_fixed_data(r("FixedData"), mitems)
+    m2items = B.parse_fixed_meta_auto(r("Fixed2Meta"), 92)[2]
+    recs2 = B.split_fixed_data(r("Fixed2Data"), m2items)
+    it = w.task_fm[NATIVE["SUMMARY_PROGRESS"]]
+    prior_it = w.task_fm[NATIVE["SUMMARY_PROGRESS_PRIOR"]]        # M365 template
+    rows = {struct.unpack_from("<I", rec, 0)[0]: i
+            for i, rec in enumerate(recs) if len(rec) > 100}
+    mark = {uid: B.decode_timestamp(recs[i], it.offset) for uid, i in rows.items()}
+    prior = {uid: B.decode_timestamp(recs2[i], prior_it.offset) for uid, i in rows.items()}
+    assert mark[2] == D(2026, 9, 7, 8) and mark[3] == D(2026, 9, 9, 8)   # each task's own start
+    assert prior[2] == D(2026, 9, 7, 8)     # starts with the project, so no earlier moment
+    assert prior[3] == D(2026, 9, 8, 17)    # the working moment before Wednesday morning
+    assert mark[1] is None and mark[0] is None      # summaries carry neither
+    assert prior[1] is None and prior[0] is None
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_warns_when_a_finished_task_has_assignments(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task, Resource, Assignment
+    from pymppwriter.writer import ScheduleWarning
+    p = Project("t", D(2026, 9, 7, 8),
+                [Task(1, "done", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2,
+                      percent_complete=100)],
+                resources=[Resource(1, "Kevin")], assignments=[Assignment(1, 1)])
+    with pytest.warns(ScheduleWarning, match="99%"):
+        MppWriter("templates/template.mpp").write(p, str(tmp_path / "o.mpp"))

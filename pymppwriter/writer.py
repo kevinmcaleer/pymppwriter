@@ -35,7 +35,8 @@ NATIVE = {"UNIQUE_ID": 86, "ID": 23, "NAME": 14, "START": 35, "FINISH": 36, "DUR
           "NOTES": 15, "WBS": 16, "CONSTRAINT_TYPE": 17, "CONSTRAINT_DATE": 18, "DEADLINE": 437,
           "PERCENT_COMPLETE": 32, "PERCENT_WORK_COMPLETE": 33, "ACTUAL_START": 41,
           "ACTUAL_FINISH": 42, "ACTUAL_DURATION": 28, "ACTUAL_WORK": 2, "STOP": 100,
-          "RESUME": 99, "PRIORITY": 25, "TYPE": 128, "EFFORT_DRIVEN": 132}
+          "RESUME": 99, "PRIORITY": 25, "TYPE": 128, "EFFORT_DRIVEN": 132,
+          "SUMMARY_PROGRESS": 387, "SUMMARY_PROGRESS_PRIOR": 1255}
 # custom field native ids, index 0 = Text1/Number1/Date1/Flag1
 TEXT_IDS = [51, 54, 57, 60, 63, 66, 67, 68, 69, 70, 317, 318, 319, 320, 321,
             322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336]
@@ -54,7 +55,9 @@ RSC_NATIVE = {"UNIQUE_ID": 27, "ID": 0, "NAME": 1, "INITIALS": 2, "EMAIL_ADDRESS
 ASSN_NATIVE = {"UNIQUE_ID": 0, "TASK_UNIQUE_ID": 1, "RESOURCE_UNIQUE_ID": 2, "START": 20,
                "FINISH": 21, "RESUME": 24, "STOP": 264, "UNITS": 7, "WORK": 8,
                "ACTUAL_WORK": 10, "REGULAR_WORK": 11, "REMAINING_WORK": 12, "GUID": 636,
-               "TASK_GUID": 637, "RESOURCE_GUID": 638, "CREATED": 634, "PLANNED_WORK_DATA": 49}
+               "TASK_GUID": 637, "RESOURCE_GUID": 638, "CREATED": 634,
+               "PLANNED_WORK_DATA": 49,      # timephased remaining regular work
+               "ACTUAL_WORK_DATA": 50}       # timephased actual regular work
 REL_TYPES = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
 PCT_SCALE = 10000.0            # resource max units / assignment units: 10000.0 = 100%
 WORK_SCALE = 100.0             # work doubles are minutes*1000 = duration tenths * 100
@@ -117,6 +120,38 @@ def advance_working(start: datetime, tenths: int, pattern=None) -> datetime:
                     minutes -= w1 - lo
         day += timedelta(days=1)
     return start
+
+
+def previous_working_moment(point: datetime, pattern=None) -> Optional[datetime]:
+    """The last working instant at or before `point` — where Project puts a
+    task's progress mark (native 387), one working period behind its start."""
+    windows, nonworking = pattern if pattern else ({wd: WORK_WINDOWS for wd in range(5)}, frozenset())
+    day, minute = point.date(), point.hour * 60 + point.minute
+    for _ in range(3700):
+        if day not in nonworking:
+            ends = [w1 for w0, w1 in windows.get(day.weekday(), ())
+                    if day < point.date() or w1 <= minute]
+            if ends:
+                m = max(ends)
+                return datetime(day.year, day.month, day.day, m // 60, m % 60)
+        day -= timedelta(days=1)
+    return None
+
+
+def next_working_moment(point: datetime, pattern=None) -> datetime:
+    """The first instant at or after `point` that work can start. The end of a
+    working window is not a valid start — Project rolls 12:00 to 13:00, and the
+    end of a half day to the next morning."""
+    windows, nonworking = pattern if pattern else ({wd: WORK_WINDOWS for wd in range(5)}, frozenset())
+    day, minute = point.date(), point.hour * 60 + point.minute
+    for _ in range(3700):
+        if day not in nonworking:
+            for w0, w1 in sorted(windows.get(day.weekday(), ())):
+                lo = max(w0, minute) if day == point.date() else w0
+                if lo < w1:
+                    return datetime(day.year, day.month, day.day, lo // 60, lo % 60)
+        day += timedelta(days=1)
+    return point
 
 
 @dataclass
@@ -274,9 +309,10 @@ def link_driven_start(rel: Relation, pred_eff, succ_dur_tenths: int, pattern):
         # longer starts at the next working moment after it
         if lag == 0 and succ_dur_tenths == 0:
             return p_finish
-        return advance_working(p_finish, lag, pattern)
+        return next_working_moment(advance_working(p_finish, lag, pattern), pattern)
     if rel.type == "SS":
-        return advance_working(p_start, lag, pattern) if lag else p_start
+        s = advance_working(p_start, lag, pattern) if lag else p_start
+        return s if succ_dur_tenths == 0 else next_working_moment(s, pattern)
     return None
 
 
@@ -620,6 +656,29 @@ class MppWriter:
                               f"no working time with the resource calendars; Project will schedule "
                               f"it ignoring the resource calendar", ScheduleWarning, stacklevel=2)
 
+        # Project reconciles a finished task against its assignments' timephased
+        # actual work (var id 50), which we do not write: it accepts the dates
+        # but recalculates the progress, showing the task at 99%
+        for uid in {a.task_uid for a in project.assignments}:
+            if by_uid[uid].percent_complete == 100:
+                warnings.warn(f"task {uid} {by_uid[uid].name!r} is 100% complete and has "
+                              f"assignments; Project recalculates progress from timephased actual "
+                              f"work, which is not written yet, and will show it at 99%",
+                              ScheduleWarning, stacklevel=2)
+
+        # a start on a window boundary (12:00, or the end of a half day) is not
+        # a working moment: Project rolls it forward on the next recalculation
+        for t in project.tasks:
+            if t.manual or children.get(t.uid) or eff[t.uid][2] == 0:
+                continue           # manual, summary and milestone rows may sit on a boundary
+            pat = pattern if t.calendar is None else _work_pattern(
+                next((c for c in project.calendars if c.name == t.calendar), None))
+            rolled = next_working_moment(eff[t.uid][0], pat)
+            if rolled != eff[t.uid][0]:
+                warnings.warn(f"task {t.uid} {t.name!r} starts {eff[t.uid][0]:%Y-%m-%d %H:%M}, which is "
+                              f"not working time; Project will move it to {rolled:%Y-%m-%d %H:%M}",
+                              ScheduleWarning, stacklevel=2)
+
         # a declared start earlier than the links allow is one Project will
         # move on its next recalculation: warn rather than write a schedule
         # that will not survive a round trip
@@ -749,6 +808,21 @@ class MppWriter:
             for f in ("FINISH", "EARLY_FINISH", "LATE_FINISH"):
                 self._put_ts(rec, f, finish)
             self._put_ts(rec, "CREATED", datetime.now().replace(second=0, microsecond=0))
+            # progress marks, or the template's own would be cloned onto every
+            # row: M365 keeps the task's start in 387 and the working moment
+            # before it in 1255; 2010-era files have only 387, holding that
+            # earlier moment. Summary rows carry neither.
+            if is_summary:
+                self._put_ts(rec, "SUMMARY_PROGRESS", None)
+                self._putf_ts(self.task_fm, NATIVE, rec, rec2, "SUMMARY_PROGRESS_PRIOR", None)
+            else:
+                mark = previous_working_moment(start, pattern)
+                mark = max(mark, project.start) if mark else project.start
+                if NATIVE["SUMMARY_PROGRESS_PRIOR"] in self.task_fm:
+                    self._put_ts(rec, "SUMMARY_PROGRESS", start)
+                    self._putf_ts(self.task_fm, NATIVE, rec, rec2, "SUMMARY_PROGRESS_PRIOR", mark)
+                else:
+                    self._put_ts(rec, "SUMMARY_PROGRESS", mark)
             rec2[0:16] = guid                 # task GUID (field map block 1, offset 0)
             struct.pack_into("<d", rec2, 16, float(position))
             rec2[24:40] = parent_guid         # parent task GUID
@@ -1014,11 +1088,18 @@ class MppWriter:
             for name in ("WORK", "REGULAR_WORK", "REMAINING_WORK"):
                 put(name, "<d", work)
             tpct = pct_eff.get(asn.task_uid, 0)
+            reached = start
             if tpct:
                 put("ACTUAL_WORK", "<d", work * tpct / 100.0)
                 put("REMAINING_WORK", "<d", work * (100 - tpct) / 100.0)
-            for name in ("START", "RESUME", "STOP"):
-                self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, name, start)
+                # how far work has got: Project reconciles the task's actuals
+                # against this, and a stop still at the start knocked a
+                # 100%-complete task back to 99% with a zero duration
+                reached = (finish if tpct == 100 else
+                           advance_working(start, int(round(dur_tenths * tpct / 100)), pattern))
+            self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "START", start)
+            for name in ("RESUME", "STOP"):
+                self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, name, reached)
             self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "FINISH", finish)
             self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "GUID", uuid.uuid4().bytes_le)
             self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "TASK_GUID", task.guid)
