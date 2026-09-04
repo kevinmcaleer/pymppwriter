@@ -1,0 +1,63 @@
+name: npm-publish
+
+# Publishes js/ to npm when a GitHub Release tagged `js-vX.Y.Z` is published.
+# The repo ships two packages, so the tag prefix decides which one goes out:
+# `vX.Y.Z` publishes pymppwriter to PyPI, `js-vX.Y.Z` publishes mppwriter here.
+#
+# Uses npm Trusted Publishing (OIDC): no token in this repository, and the
+# release carries provenance. One-time setup is in CONTRIBUTING.md.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Pack and inspect without publishing
+        type: boolean
+        default: true
+
+defaults:
+  run:
+    working-directory: js
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'js-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # mints the short-lived token Trusted Publishing uses
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          registry-url: https://registry.npmjs.org
+
+      # OIDC publishing needs a newer npm than Node 22 ships with
+      - run: npm install -g npm@latest
+      - run: npm --version
+
+      - name: Version matches the tag
+        if: github.event_name == 'release'
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="${GITHUB_REF_NAME#js-v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::package.json version $version does not match tag $tag — bump one of them"
+            exit 1
+          fi
+          echo "Publishing mppwriter $version"
+
+      # a release that cannot pass its own tests should not reach the registry
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: What would be published
+        run: npm pack --dry-run
+
+      - name: Publish to npm
+        if: github.event_name == 'release'
+        run: npm publish --provenance --access public

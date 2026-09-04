@@ -17,6 +17,8 @@ on:
 
 jobs:
   build:
+    # `js-vX.Y.Z` releases belong to the npm package, not this one
+    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.release.tag_name, 'js-v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
