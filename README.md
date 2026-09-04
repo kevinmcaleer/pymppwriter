@@ -151,6 +151,23 @@ In JSON specs, resources and assignments look like:
 
 Tasks are written in list order, which becomes the ID / row order in Project.
 
+### Baselines
+
+```python
+from pymppwriter import MppWriter, Project, Task
+from pymppwriter.writer import set_baseline, clear_baseline
+
+set_baseline(project)            # slot 0, the unnumbered Baseline
+set_baseline(project, 3)         # Baseline3
+clear_baseline(project, 0)
+MppWriter("templates/template.mpp").write(project, "plan.mpp")
+```
+
+Saves the current schedule — start, finish, duration and work per task, summaries spanning their
+children — into one of the eleven slots, and `read_project()` returns them as `task.baselines`.
+Baselines are stored as variable data, not the fixed record fields, which is what a Project-written
+reference showed; `docs/FORMAT_NOTES.md` has the layout.
+
 ### Validation
 
 `MppWriter.write()` validates the plan first and refuses to write a file Project would reject or

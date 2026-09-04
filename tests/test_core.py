@@ -846,3 +846,78 @@ def test_read_baselines_from_a_project_written_file():
             assert 0 <= slot <= 10
             assert b.start is not None and b.finish is not None
             assert b.finish >= b.start
+
+
+def test_set_and_clear_baseline_capture_the_schedule():
+    from datetime import datetime as D
+    from pymppwriter import Project, Task, Resource, Assignment
+    from pymppwriter.writer import set_baseline, clear_baseline
+    p = Project("b", D(2027, 4, 5, 8),
+                [Task(1, "Phase", D(2027, 4, 5, 8), D(2027, 4, 9, 17), outline_level=1),
+                 Task(2, "Design", D(2027, 4, 5, 8), D(2027, 4, 6, 17), duration_days=2,
+                      outline_level=2, parent_uid=1),
+                 Task(3, "Build", D(2027, 4, 7, 8), D(2027, 4, 9, 17), duration_days=3,
+                      outline_level=2, parent_uid=1)],
+                resources=[Resource(1, "Kevin")], assignments=[Assignment(2, 1)])
+    set_baseline(p)
+    by_uid = {t.uid: t for t in p.tasks}
+    assert by_uid[2].baselines[0].duration_days == 2.0
+    assert by_uid[2].baselines[0].work_hours == 16.0          # one resource on a 2-day task
+    assert by_uid[3].baselines[0].work_hours == 0.0           # nobody assigned
+    summary = by_uid[1].baselines[0]                           # spans its children
+    assert (summary.start, summary.finish) == (D(2027, 4, 5, 8), D(2027, 4, 9, 17))
+    assert summary.duration_days == 5.0 and summary.work_hours == 16.0
+
+    set_baseline(p, 3)                                         # a numbered slot, alongside slot 0
+    assert sorted(by_uid[2].baselines) == [0, 3]
+    clear_baseline(p, 0)
+    assert sorted(by_uid[2].baselines) == [3]
+    for bad in (-1, 11):
+        with pytest.raises(ValueError, match="0-10"):
+            set_baseline(p, bad)
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_baselines_survive_write_and_read(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task, Resource, Assignment, read_project
+    from pymppwriter.writer import set_baseline, TASK_BASELINE_IDS, PROPS_BASELINE_SAVED
+    p = Project("b", D(2027, 4, 5, 8),
+                [Task(1, "Design", D(2027, 4, 5, 8), D(2027, 4, 6, 17), duration_days=2),
+                 Task(2, "Build", D(2027, 4, 7, 8), D(2027, 4, 9, 17), duration_days=3)],
+                resources=[Resource(1, "Kevin")], assignments=[Assignment(1, 1)])
+    set_baseline(p)
+    set_baseline(p, 1)
+    out = tmp_path / "b.mpp"
+    MppWriter("templates/template.mpp", now=lambda: D(2027, 4, 5, 12)).write(p, str(out))
+
+    back = {t.uid: t for t in read_project(str(out)).tasks}
+    assert sorted(back[1].baselines) == [0, 1]
+    b = back[1].baselines[0]
+    assert (b.start, b.finish) == (D(2027, 4, 5, 8), D(2027, 4, 6, 17))
+    assert b.duration_days == 2.0 and b.work_hours == 16.0
+
+    # written as var data, with the save date stamped in Props
+    ole = olefile.OleFileIO(str(out))
+    _, table, _ = B.parse_var_meta(ole.openstream("   114/TBkndTask/VarMeta").read())
+    assert TASK_BASELINE_IDS[0]["start"] in table[1]
+    assert TASK_BASELINE_IDS[1]["finish"] in table[1]
+    _, props, _ = B.parse_props(ole.openstream("   114/Props").read())
+    assert B.decode_timestamp(props[PROPS_BASELINE_SAVED], 0) == D(2027, 4, 5, 12)
+
+    # baselines are var data: the id is not in the fixed field map at all,
+    # which is why writing them as fixed fields would have gone nowhere
+    w = MppWriter("templates/template.mpp")
+    assert TASK_BASELINE_IDS[0]["start"] not in w.task_fm
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_no_baseline_leaves_the_save_date_at_na(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task
+    from pymppwriter.writer import PROPS_BASELINE_SAVED
+    out = tmp_path / "n.mpp"
+    MppWriter("templates/template.mpp").write(
+        Project("n", D(2027, 4, 5, 8), [Task(1, "A", D(2027, 4, 5, 8), D(2027, 4, 5, 17))]), str(out))
+    _, props, _ = B.parse_props(olefile.OleFileIO(str(out)).openstream("   114/Props").read())
+    assert B.decode_timestamp(props[PROPS_BASELINE_SAVED], 0) is None
