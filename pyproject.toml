@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pymppwriter"
-version = "0.3.0"
+version = "0.4.0"
 description = "Write Microsoft Project .mpp files from pure Python (template-based MPP14 writer)"
 readme = "README.md"
 license = { text = "MIT" }
