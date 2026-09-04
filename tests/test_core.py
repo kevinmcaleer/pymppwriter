@@ -566,3 +566,29 @@ def test_writer_warns_on_task_calendar_without_common_working_time(tmp_path):
                 calendars=[nights])
     with pytest.warns(ScheduleWarning, match="shares no working time"):
         MppWriter("templates/template.mpp").write(p, str(tmp_path / "o.mpp"))
+
+
+def test_validator_handles_chains_deeper_than_the_recursion_limit():
+    from datetime import datetime as D
+    from pymppwriter.writer import validate, Project, Task, Relation
+    n = 3000
+    tasks = [Task(i, f"t{i}", D(2026, 1, 5, 8), D(2026, 1, 5, 17)) for i in range(1, n + 1)]
+    rels = [Relation(i, i + 1) for i in range(1, n)]
+    validate(Project("p", D(2026, 1, 5), tasks, rels))          # no RecursionError
+    with pytest.raises(ValueError, match="cycle"):
+        validate(Project("p", D(2026, 1, 5), tasks, rels + [Relation(n, 1)]))
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_large_project_engages_difat(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task
+    note = "Generated task note. " * 60                 # ~1.2 KB of RTF each
+    tasks = [Task(i, f"Task {i}", D(2027, 1, 4, 8), D(2027, 1, 4, 17), notes=note)
+             for i in range(1, 4001)]
+    out = tmp_path / "big.mpp"
+    MppWriter("templates/template.mpp").write(Project("big", D(2027, 1, 4, 8), tasks), str(out))
+    assert out.stat().st_size > 6_800_000               # more than 109 FAT sectors
+    ole = olefile.OleFileIO(str(out))
+    assert ole.get_size("   114/TBkndTask/Var2Data") > 4_000_000
+    assert len(B.parse_fixed_meta_auto(ole.openstream("   114/TBkndTask/FixedMeta").read(), 47)[2]) > 4000

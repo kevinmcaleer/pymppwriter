@@ -318,21 +318,29 @@ def validate(project: Project) -> None:
         if rel.pred_uid == rel.succ_uid:
             raise ValueError(f"task {rel.pred_uid} cannot depend on itself")
         succs.setdefault(rel.pred_uid, []).append(rel.succ_uid)
-    state: Dict[int, int] = {}    # 0/absent=new, 1=in progress, 2=done
-
-    def visit(uid: int, trail: List[int]) -> None:
-        state[uid] = 1
-        for nxt in succs.get(uid, []):
-            if state.get(nxt) == 1:
-                cycle = trail[trail.index(nxt):] + [nxt] if nxt in trail else [uid, nxt]
+    # depth-first search with an explicit stack: a plan may chain far more
+    # tasks than Python's recursion limit allows
+    state: Dict[int, int] = {}    # 0/absent=new, 1=on the current path, 2=done
+    for root in succs:
+        if state.get(root, 0):
+            continue
+        state[root] = 1
+        trail = [root]
+        stack = [(root, iter(succs[root]))]
+        while stack:
+            uid, pending = stack[-1]
+            nxt = next(pending, None)
+            if nxt is None:
+                state[uid] = 2
+                stack.pop()
+                trail.pop()
+            elif state.get(nxt) == 1:      # still on the current path = cycle
+                cycle = trail[trail.index(nxt):] + [nxt]
                 raise ValueError(f"dependency cycle: {' -> '.join(map(str, cycle))}")
-            if state.get(nxt, 0) == 0:
-                visit(nxt, trail + [nxt])
-        state[uid] = 2
-
-    for uid in list(succs):
-        if state.get(uid, 0) == 0:
-            visit(uid, [uid])
+            elif state.get(nxt, 0) == 0:
+                state[nxt] = 1
+                trail.append(nxt)
+                stack.append((nxt, iter(succs.get(nxt, ()))))
 
 
 class MppWriter:
