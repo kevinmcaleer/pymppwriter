@@ -11,6 +11,7 @@ import { readFileSync, existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MppWriter } from "../src/writer.ts";
+import { clearBaseline, setBaseline } from "../src/model.ts";
 import type { Calendar, Project } from "../src/model.ts";
 
 const repo = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
@@ -77,6 +78,13 @@ const project: Project = {
   currencySymbol: "£",
   currencyCode: "GBP",
 };
+
+// baselines on tasks, resources and assignments: slot 0 and a numbered slot,
+// plus a slot set then cleared so the cleared-entry shape is compared too
+setBaseline(project);
+setBaseline(project, 4);
+setBaseline(project, 7);
+clearBaseline(project, 7);
 
 test("the writer matches the Python implementation byte for byte", { skip: !runnable }, () => {
   const dir = mkdtempSync(join(tmpdir(), "mppwriter-writer-"));

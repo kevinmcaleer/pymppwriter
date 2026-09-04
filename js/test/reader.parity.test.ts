@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { readProject, MppReadError } from "../src/reader.ts";
 import { MppWriter } from "../src/writer.ts";
 import { Storage, writeCfb } from "../src/cfb.ts";
+import { clearBaseline, setBaseline, type Baseline, type Project } from "../src/model.ts";
 
 const repo = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 const python = `${repo}/.venv/bin/python`;
@@ -25,6 +26,18 @@ function asJson(bytes: Uint8Array): unknown {
   const p = readProject(bytes);
   // Python's isoformat() has no milliseconds
   const iso = (d: Date | null | undefined) => (d ? d.toISOString().replace(".000Z", "") : null);
+  // the same normalised baseline shape parity_reader.py prints, so the three
+  // entity classes compare field for field
+  const bl = (d: Record<number, Baseline> | undefined) =>
+    Object.fromEntries(
+      Object.keys(d ?? {}).map(Number).sort((a, b) => a - b).map((slot) => {
+        const b = d![slot]!;
+        return [String(slot), {
+          start: iso(b.start), finish: iso(b.finish),
+          durationDays: b.durationDays ?? 0, workHours: b.workHours ?? 0, cost: b.cost ?? 0,
+        }];
+      }),
+    );
   return {
     title: p.title,
     start: iso(p.start),
@@ -34,10 +47,16 @@ function asJson(bytes: Uint8Array): unknown {
       durationUnits: t.durationUnits, estimated: t.estimated, notes: t.notes,
       wbs: t.wbs ?? null, constraint: t.constraint ?? null, constraintDate: iso(t.constraintDate),
       percentComplete: t.percentComplete, priority: t.priority, manual: t.manual,
+      baselines: bl(t.baselines),
     })),
     relations: p.relations!.map((r) => ({ predUid: r.predUid, succUid: r.succUid, type: r.type, lagDays: r.lagDays })),
-    resources: p.resources!.map((r) => ({ uid: r.uid, name: r.name, initials: r.initials, email: r.email, maxUnits: r.maxUnits })),
-    assignments: p.assignments!.map((a) => ({ taskUid: a.taskUid, resourceUid: a.resourceUid, units: a.units })),
+    resources: p.resources!.map((r) => ({
+      uid: r.uid, name: r.name, initials: r.initials, email: r.email, maxUnits: r.maxUnits,
+      baselines: bl(r.baselines),
+    })),
+    assignments: p.assignments!.map((a) => ({
+      taskUid: a.taskUid, resourceUid: a.resourceUid, units: a.units, baselines: bl(a.baselines),
+    })),
   };
 }
 
@@ -93,4 +112,44 @@ test("a compound file that is not a project is rejected", () => {
   const root = new Storage();
   root.set("something", new TextEncoder().encode("not a project"));
   assert.throws(() => readProject(writeCfb(root)), MppReadError);
+});
+
+test("baselines round-trip through the writer and reader", { skip: !runnable }, () => {
+  const project: Project = {
+    title: "Baselines",
+    start: D(2027, 4, 5, 8),
+    tasks: [
+      { uid: 1, name: "Design", start: D(2027, 4, 5, 8), finish: D(2027, 4, 6, 17), durationDays: 2 },
+      { uid: 2, name: "Build", start: D(2027, 4, 7, 8), finish: D(2027, 4, 9, 17), durationDays: 3 },
+    ],
+    resources: [{ uid: 1, name: "Kevin" }, { uid: 2, name: "Ada" }],
+    assignments: [{ taskUid: 1, resourceUid: 1 }, { taskUid: 2, resourceUid: 2, units: 0.5 }],
+  };
+  setBaseline(project);
+  setBaseline(project, 1);
+  const write = () =>
+    readProject(new MppWriter(new Uint8Array(readFileSync(template)), { onWarning: () => {} }).build(project));
+
+  let back = write();
+  const task = new Map(back.tasks.map((t) => [t.uid, t]));
+  assert.deepEqual(Object.keys(task.get(1)!.baselines!), ["0", "1"]);
+  assert.equal(task.get(1)!.baselines![0]!.durationDays, 2);
+  assert.equal(task.get(1)!.baselines![0]!.workHours, 16);
+
+  const rsc = new Map(back.resources!.map((r) => [r.uid, r]));
+  assert.deepEqual(Object.keys(rsc.get(1)!.baselines!), ["0", "1"]);
+  assert.equal(rsc.get(1)!.baselines![0]!.workHours, 16);
+  assert.equal(rsc.get(2)!.baselines![0]!.workHours, 12); // a 3-day task at 50%
+  assert.equal(rsc.get(1)!.baselines![0]!.start, undefined, "no dates on a resource baseline");
+
+  const asn = new Map(back.assignments!.map((a) => [`${a.taskUid}-${a.resourceUid}`, a]));
+  assert.equal(asn.get("1-1")!.baselines![0]!.start!.getTime(), D(2027, 4, 5, 8).getTime());
+  assert.equal(asn.get("2-2")!.baselines![0]!.workHours, 12);
+
+  // a cleared slot must not read back, on any of the three classes
+  clearBaseline(project, 0);
+  back = write();
+  assert.deepEqual(Object.keys(back.tasks[0]!.baselines!), ["1"]);
+  assert.deepEqual(Object.keys(back.resources![0]!.baselines!), ["1"]);
+  assert.deepEqual(Object.keys(back.assignments![0]!.baselines!), ["1"]);
 });
