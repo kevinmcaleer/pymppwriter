@@ -1,0 +1,29 @@
+{
+  "title": "Robot build plan",
+  "start": "2026-09-07T08:00",
+  "author": "Kevin McAleer",
+  "company": "Kev's Robots",
+  "manager": "Kev",
+  "keywords": "robots;3dprinting",
+  "status_date": "2026-09-09T17:00",
+  "currency_symbol": "£",
+  "currency_code": "GBP",
+  "tasks": [
+    {"uid": 1, "name": "Half done", "start": "2026-09-07T08:00", "finish": "2026-09-10T17:00",
+     "duration_days": 4, "percent_complete": 50,
+     "notes": "Started Monday.\nBlocked on parts - see Text1.", "text": {"1": "waiting on PSU"}},
+    {"uid": 2, "name": "Done", "start": "2026-09-11T08:00", "finish": "2026-09-11T17:00",
+     "duration_days": 1, "percent_complete": 100},
+    {"uid": 3, "name": "Constrained", "start": "2026-09-14T08:00", "finish": "2026-09-15T17:00",
+     "duration_days": 2, "constraint": "SNET", "constraint_date": "2026-09-14T08:00",
+     "deadline": "2026-09-18T17:00", "priority": 800, "task_type": "fixed_work", "effort_driven": true},
+    {"uid": 4, "name": "Manual island", "start": "2026-09-16T08:00", "finish": "2026-09-17T17:00",
+     "duration_days": 2, "manual": true},
+    {"uid": 5, "name": "Coded", "start": "2026-09-18T08:00", "finish": "2026-09-18T17:00",
+     "duration_days": 1, "wbs": "A.1.5", "number": {"1": 3.14}, "date": {"1": "2026-10-31T09:00"},
+     "flag": {"1": true}}
+  ],
+  "links": [ {"pred": 1, "succ": 2} ],
+  "resources": [ {"uid": 1, "name": "Kevin McAleer", "initials": "KM"} ],
+  "assignments": [ {"task": 1, "resource": 1} ]
+}

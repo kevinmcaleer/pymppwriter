@@ -1,0 +1,19 @@
+{
+  "title": "Resources and assignments",
+  "start": "2026-09-07T08:00",
+  "tasks": [
+    {"uid": 1, "name": "Design", "start": "2026-09-07T08:00", "finish": "2026-09-09T17:00", "duration_days": 3},
+    {"uid": 2, "name": "Build", "start": "2026-09-10T08:00", "finish": "2026-09-16T17:00", "duration_days": 5},
+    {"uid": 3, "name": "Review", "start": "2026-09-17T08:00", "finish": "2026-09-17T17:00", "duration_days": 1}
+  ],
+  "links": [ {"pred": 1, "succ": 2}, {"pred": 2, "succ": 3} ],
+  "resources": [
+    {"uid": 1, "name": "Kevin McAleer", "initials": "KM", "email": "kev@example.com"},
+    {"uid": 2, "name": "CNC Robot", "initials": "CNC", "max_units": 2.0}
+  ],
+  "assignments": [
+    {"task": 1, "resource": 1},
+    {"task": 2, "resource": 2, "units": 0.5},
+    {"task": 3, "resource": 1}
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "title": "Calendars showcase",
+  "start": "2026-09-07T08:00",
+  "calendar": {
+    "week": {"wed": [["08:00", "12:00"]]},
+    "holidays": ["2026-09-21", {"from": "2026-10-01", "to": "2026-10-02", "name": "Conference"}]
+  },
+  "calendars": [
+    {"name": "Nights", "week": {"mon": [["18:00", "22:00"]], "tue": [["18:00", "22:00"]],
+      "wed": [["18:00", "22:00"]], "thu": [["18:00", "22:00"]], "fri": [["18:00", "22:00"]]}}
+  ],
+  "tasks": [
+    {"uid": 1, "name": "Normal task", "start": "2026-09-07T08:00", "finish": "2026-09-09T12:00", "duration_days": 2.5},
+    {"uid": 2, "name": "Spans the holiday", "start": "2026-09-17T08:00", "finish": "2026-09-24T17:00", "duration_days": 5},
+    {"uid": 3, "name": "Night shift", "start": "2026-09-10T18:00", "finish": "2026-09-11T22:00", "duration_days": 1, "calendar": "Nights"}
+  ],
+  "links": [ {"pred": 1, "succ": 2} ]
+}

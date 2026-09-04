@@ -1,0 +1,14 @@
+{
+  "title": "Durations showcase",
+  "start": "2026-09-07T08:00",
+  "tasks": [
+    {"uid": 10, "name": "Phase A", "start": "2026-09-07T08:00", "finish": "2026-09-16T17:00", "outline_level": 1},
+    {"uid": 1, "name": "Three days", "start": "2026-09-07T08:00", "finish": "2026-09-09T17:00", "duration_days": 3, "outline_level": 2, "parent_uid": 10},
+    {"uid": 2, "name": "One week", "start": "2026-09-10T08:00", "finish": "2026-09-16T17:00", "duration_days": 5, "outline_level": 2, "parent_uid": 10},
+    {"uid": 3, "name": "Two weeks", "start": "2026-09-17T08:00", "finish": "2026-09-30T17:00", "duration_days": 10, "duration_units": "w"},
+    {"uid": 4, "name": "Half day", "start": "2026-10-01T08:00", "finish": "2026-10-01T12:00", "duration_days": 0.5},
+    {"uid": 5, "name": "Estimated four days", "start": "2026-10-02T08:00", "finish": "2026-10-07T17:00", "duration_days": 4, "estimated": true},
+    {"uid": 6, "name": "Milestone", "start": "2026-10-07T17:00", "finish": "2026-10-07T17:00", "duration_days": 0}
+  ],
+  "links": [ {"pred": 1, "succ": 2} ]
+}

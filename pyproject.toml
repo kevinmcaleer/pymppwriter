@@ -4,15 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pymppwriter"
-version = "0.1.0"
+version = "0.2.0"
 description = "Write Microsoft Project .mpp files from pure Python (template-based MPP14 writer)"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Kevin McAleer" }]
 requires-python = ">=3.9"
 dependencies = ["olefile>=0.47"]
+keywords = ["mpp", "microsoft-project", "project-management", "gantt", "scheduling"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Topic :: Office/Business :: Scheduling",
@@ -20,6 +21,8 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/kevinmcaleer/pymppwriter"
+Documentation = "https://kevinmcaleer.github.io/pymppwriter/"
+Issues = "https://github.com/kevinmcaleer/pymppwriter/issues"
 
 [project.scripts]
 pymppwriter = "pymppwriter.cli:main"
