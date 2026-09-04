@@ -8,9 +8,10 @@ A port of [pymppwriter](https://github.com/kevinmcaleer/pymppwriter), sharing it
 its test fixtures. Both implementations are checked against each other byte for byte, so a fix in
 one cannot silently diverge from the other.
 
-> **Status: in progress.** The compound-file container (read and write, mini streams, DIFAT) is
-> done and byte-identical to the Python implementation. The record layer, writer and reader are
-> next — see [epic #54](https://github.com/kevinmcaleer/pymppwriter/issues/54).
+> **Status: in progress.** The compound-file container and the record layer — Props, field maps,
+> fixed records and their meta bitmaps, var blocks, OLE property sets, calendar data — are done and
+> byte-identical to the Python implementation. The writer and reader are next; see
+> [epic #54](https://github.com/kevinmcaleer/pymppwriter/issues/54).
 
 ## Install
 
@@ -32,6 +33,21 @@ const out = writeCfb(tree);                      // back to a .mpp container
 
 `Storage` is an ordered tree of storages and streams. Children are held in a `Map`, never a plain
 object — JavaScript reorders integer-like keys, and this format is full of numeric names.
+
+## The record layer
+
+```ts
+import { parseProps, parseFieldMap, parseFixedMetaAuto, splitFixedData, PROPS_TASK_FIELD_MAP } from "mppwriter";
+
+const { values } = parseProps(tree.get("   114/Props")!);
+const fields = parseFieldMap(values.get(PROPS_TASK_FIELD_MAP)!);   // every offset comes from here
+const meta = parseFixedMetaAuto(tree.get("   114/TBkndTask/FixedMeta")!, 47);
+const records = splitFixedData(tree.get("   114/TBkndTask/FixedData")!, meta.items);
+```
+
+Field offsets are read from each file's own map rather than hard-coded, which is what lets one
+implementation handle every MPP14-era Project. `encodeCp1252` is here too — JavaScript has no codec
+for it, and the OLE property sets need one.
 
 ## Development
 

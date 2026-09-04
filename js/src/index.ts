@@ -10,3 +10,5 @@ export {
   TYPE_STREAM,
   TYPE_ROOT,
 } from "./cfb.ts";
+
+export * from "./blocks.ts";
