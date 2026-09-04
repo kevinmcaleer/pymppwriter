@@ -8,9 +8,8 @@ A port of [pymppwriter](https://github.com/kevinmcaleer/pymppwriter), sharing it
 its test fixtures. Both implementations are checked against each other byte for byte, so a fix in
 one cannot silently diverge from the other.
 
-> **Status: in progress.** The compound-file container and the record layer — Props, field maps,
-> fixed records and their meta bitmaps, var blocks, OLE property sets, calendar data — are done and
-> byte-identical to the Python implementation. The writer and reader are next; see
+> **Status: the writer works.** Container, record layer and writer are done, and produce files
+> **byte-identical** to the Python implementation given the same input. The reader is next; see
 > [epic #54](https://github.com/kevinmcaleer/pymppwriter/issues/54).
 
 ## Install
@@ -19,7 +18,33 @@ one cannot silently diverge from the other.
 npm install mppwriter
 ```
 
-## The container today
+## Writing a plan
+
+```ts
+import { MppWriter } from "mppwriter";
+
+const D = (y: number, m: number, d: number, h = 0) => new Date(Date.UTC(y, m - 1, d, h));
+
+const bytes = new MppWriter(templateBytes).build({
+  title: "Robot build",
+  start: D(2027, 3, 1, 8),
+  tasks: [
+    { uid: 1, name: "Design", start: D(2027, 3, 1, 8), finish: D(2027, 3, 2, 17), durationDays: 2 },
+    { uid: 2, name: "Build", start: D(2027, 3, 3, 8), finish: D(2027, 3, 5, 17), durationDays: 3 },
+  ],
+  relations: [{ predUid: 1, succUid: 2 }],
+});
+```
+
+`build()` takes and returns bytes, so it runs unchanged in the browser — hand it a template from a
+file input and download the result. **Dates are read in UTC**: the format stores wall-clock times
+with no zone, so `Date.UTC(2027, 2, 1, 8)` means 08:00 in the plan.
+
+Pass `newGuid` and `now` to make output reproducible, and `onWarning` to catch the schedules
+Microsoft Project accepts but silently changes (a start earlier than its links allow, a start in
+non-working time, a task calendar sharing no working time with its resources').
+
+## The container
 
 ```ts
 import { readCfb, writeCfb, Storage } from "mppwriter";

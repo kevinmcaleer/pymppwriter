@@ -434,7 +434,7 @@ export const CAL_DAY_DEFAULT = 1;
 export const CAL_DAY_WORKING = 2;
 
 export type DayBlock = [type: number, ranges: Array<[start: number, end: number]>];
-export type CalendarException = [from: Date, to: Date, name: string];
+export type CalendarExceptionTuple = [from: Date, to: Date, name: string];
 
 /**
  * A calendar definition blob (var-data key 8 on a TBkndCal record), in the
@@ -444,7 +444,7 @@ export type CalendarException = [from: Date, to: Date, name: string];
  * days: 7 (type, ranges) entries, **Sunday first**; ranges are
  * (startMinute, endMinute) from midnight, at most 5 a day.
  */
-export function buildCalendarData(days: DayBlock[], exceptions: CalendarException[] = []): Uint8Array {
+export function buildCalendarData(days: DayBlock[], exceptions: CalendarExceptionTuple[] = []): Uint8Array {
   if (days.length !== 7) throw new Error("days must have exactly 7 entries, Sunday first");
   const parts: Uint8Array[] = [];
   for (const [dtype, ranges] of days) {

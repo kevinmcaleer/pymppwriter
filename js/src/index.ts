@@ -12,3 +12,6 @@ export {
 } from "./cfb.ts";
 
 export * from "./blocks.ts";
+
+export * from "./model.ts";
+export { MppWriter, writeProject, type WriterOptions } from "./writer.ts";
