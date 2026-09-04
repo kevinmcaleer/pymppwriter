@@ -90,17 +90,30 @@ publishes:
 
 | tag | package | index |
 |---|---|---|
-| `v0.3.1` | `pymppwriter` (Python) | PyPI |
-| `js-v0.1.0` | `mppwriter` (`js/`) | npm |
+| `v0.4.1` | `pymppwriter` (Python) | PyPI |
+| `js-v0.4.0` | `mppwriter` (`js/`) | npm |
+
+The two packages are byte-compatible implementations of the same library and
+**share a version line**, so `pymppwriter X.Y.Z` and `mppwriter X.Y.Z` describe
+the same behaviour. Bump them together.
 
 `.github/workflows/npm-publish.yml` uses **npm Trusted Publishing**, so no token
 lives here either, and the published package carries provenance.
 
 ### One-time setup (on npmjs.com)
 
-1. Sign in → the `mppwriter` package → **Settings** → **Trusted publisher**. For
-   a name never published, publish once manually or add the publisher when the
-   package is created.
+npm has no *pending publisher* flow like PyPI's: trusted publishing is
+configured in a package's own settings, so it cannot be attached to a name that
+does not exist yet. **The first publish of a new package must be manual**, from
+a machine logged in to npm:
+
+```bash
+cd js && npm run build && npm login && npm publish --access public
+```
+
+After that, once:
+
+1. Sign in → the `mppwriter` package → **Settings** → **Trusted publisher**.
 2. Fill in:
 
    | Field | Value |
@@ -115,7 +128,7 @@ lives here either, and the published package carries provenance.
 2. Tag and push, then publish the GitHub Release for that tag:
 
    ```bash
-   git tag js-v0.1.0 && git push origin js-v0.1.0
+   git tag js-v0.4.0 && git push origin js-v0.4.0
    ```
 
 **Actions → npm-publish → Run workflow** does a dry run: it installs, typechecks,
