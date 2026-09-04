@@ -104,6 +104,38 @@ def encode_rtf_notes(text: str) -> bytes:
             "\\pard\\f0\\fs20 " + "".join(out) + "}").encode("ascii")
 
 
+def decode_rtf_notes(rtf: bytes) -> str:
+    """Plain text back out of the RTF envelope encode_rtf_notes() writes."""
+    text = rtf.decode("ascii", "replace")
+    body = text.split("\\fs20 ", 1)[-1]
+    if body.endswith("}"):
+        body = body[:-1]          # the group terminator, not an escaped brace
+    out, i = [], 0
+    while i < len(body):
+        ch = body[i]
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        if body.startswith("\\par ", i):
+            out.append("\n")
+            i += 5
+        elif body.startswith("\\u", i):
+            j = i + 2
+            digits = ""
+            while j < len(body) and (body[j].isdigit() or (body[j] == "-" and not digits)):
+                digits += body[j]
+                j += 1
+            out.append(chr(int(digits)) if digits else "")
+            i = j + 1 if j < len(body) and body[j] == "?" else j
+        elif i + 1 < len(body):
+            out.append(body[i + 1])       # escaped \{ \} \\
+            i += 2
+        else:
+            i += 1
+    return "".join(out).strip()
+
+
 def advance_working(start: datetime, tenths: int, pattern=None) -> datetime:
     """The datetime reached after `tenths` of working time from `start`."""
     windows, nonworking = pattern if pattern else ({wd: WORK_WINDOWS for wd in range(5)}, frozenset())
