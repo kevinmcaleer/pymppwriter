@@ -228,6 +228,21 @@ Two engine behaviours matter when Project recalculates an opened file:
   lag@16`, M365 files `type@12, lag@14, lagUnits@18` (writing the 2010 shape into an M365 file put
   the units code 7 into the lag field = 42-second successor slips). The era is detected from the
   relation field map (native id 9 at offset 0 = 2010).
+Three more came out of the first full golden round (a file exercising every feature, resaved in
+Project M365):
+* **task starts must be working moments.** A start of 12:00 (the end of the morning window) or the
+  end of a half day is not a start Project accepts — it rolls the task on to 13:00 or the next
+  morning. `next_working_moment()` normalises link-derived starts, and a declared start in
+  non-working time raises a `ScheduleWarning`.
+* **progress marks are an era pair.** M365 keeps the task's own start in native 387 and the working
+  moment before it in native 1255; 2010-era files map only 387, holding that earlier moment.
+  Summary rows carry neither. Cloning the template's values instead put the day the template was
+  saved on every row.
+* **an assignment's stop/resume gate the task's actuals.** Project reconciles a task's progress
+  against its assignments: with the assignment's `STOP`/`RESUME` (ids 264/24) left at the task's
+  start, a 100%-complete task came back from a resave at 99% with its duration zeroed and its
+  actual finish cleared. Project's own files put both at the point work has reached — the finish
+  for a completed assignment.
 `scripts/roundtrip_check.py` compares a generated file against a Project-resaved copy through MPXJ
 (tasks, resources, assignments; rows added in Project are allowed) — both findings above came out of
 its first run. The Gantt scroll position is a timestamp inside `214/CV_iew/Var2Data` equal to the

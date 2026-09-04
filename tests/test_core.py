@@ -481,7 +481,8 @@ def test_link_driven_start_rules():
     pred = (D(2026, 9, 7, 8), D(2026, 9, 8, 17), 9600)       # Mon 08:00 -> Tue 17:00
     assert link_driven_start(Relation(1, 2), pred, 4800, pat) == D(2026, 9, 9, 8)
     assert link_driven_start(Relation(1, 2), pred, 0, pat) == D(2026, 9, 8, 17)   # milestone
-    assert link_driven_start(Relation(1, 2, lag_days=1.0), pred, 4800, pat) == D(2026, 9, 9, 17)
+    # a day of lag lands on Wednesday 17:00, which is not a start: Project rolls it on
+    assert link_driven_start(Relation(1, 2, lag_days=1.0), pred, 4800, pat) == D(2026, 9, 10, 8)
     assert link_driven_start(Relation(1, 2, type="SS"), pred, 4800, pat) == D(2026, 9, 7, 8)
     assert link_driven_start(Relation(1, 2, type="FF"), pred, 4800, pat) is None
 
@@ -594,6 +595,17 @@ def test_writer_large_project_engages_difat(tmp_path):
     assert len(B.parse_fixed_meta_auto(ole.openstream("   114/TBkndTask/FixedMeta").read(), 47)[2]) > 4000
 
 
+def test_next_working_moment():
+    from datetime import datetime as D
+    from pymppwriter.writer import next_working_moment, _work_pattern, Calendar
+    assert next_working_moment(D(2026, 9, 7, 12)) == D(2026, 9, 7, 13)      # lunch boundary
+    assert next_working_moment(D(2026, 9, 7, 17)) == D(2026, 9, 8, 8)       # end of day
+    assert next_working_moment(D(2026, 9, 7, 9)) == D(2026, 9, 7, 9)        # already working
+    assert next_working_moment(D(2026, 9, 5, 9)) == D(2026, 9, 7, 8)        # Saturday -> Monday
+    half = _work_pattern(Calendar(week={2: [(480, 720)]}))                  # Wednesday half day
+    assert next_working_moment(D(2026, 9, 9, 12), half) == D(2026, 9, 10, 8)
+
+
 def test_previous_working_moment():
     from datetime import datetime as D
     from pymppwriter.writer import previous_working_moment, _work_pattern, Calendar
@@ -622,9 +634,16 @@ def test_writer_replaces_the_templates_progress_mark(tmp_path):
     r = lambda s: ole.openstream("   114/TBkndTask/" + s).read()
     mitems = B.parse_fixed_meta_auto(r("FixedMeta"), 47)[2]
     recs = B.split_fixed_data(r("FixedData"), mitems)
+    m2items = B.parse_fixed_meta_auto(r("Fixed2Meta"), 92)[2]
+    recs2 = B.split_fixed_data(r("Fixed2Data"), m2items)
     it = w.task_fm[NATIVE["SUMMARY_PROGRESS"]]
-    mark = {struct.unpack_from("<I", rec, 0)[0]: B.decode_timestamp(rec, it.offset)
-            for rec in recs if len(rec) > 100}
-    assert mark[2] == D(2026, 9, 7, 8)      # starts with the project, so no earlier moment
-    assert mark[3] == D(2026, 9, 8, 17)     # the working moment before Wednesday morning
-    assert mark[1] is None and mark[0] is None      # summaries carry no mark
+    prior_it = w.task_fm[NATIVE["SUMMARY_PROGRESS_PRIOR"]]        # M365 template
+    rows = {struct.unpack_from("<I", rec, 0)[0]: i
+            for i, rec in enumerate(recs) if len(rec) > 100}
+    mark = {uid: B.decode_timestamp(recs[i], it.offset) for uid, i in rows.items()}
+    prior = {uid: B.decode_timestamp(recs2[i], prior_it.offset) for uid, i in rows.items()}
+    assert mark[2] == D(2026, 9, 7, 8) and mark[3] == D(2026, 9, 9, 8)   # each task's own start
+    assert prior[2] == D(2026, 9, 7, 8)     # starts with the project, so no earlier moment
+    assert prior[3] == D(2026, 9, 8, 17)    # the working moment before Wednesday morning
+    assert mark[1] is None and mark[0] is None      # summaries carry neither
+    assert prior[1] is None and prior[0] is None
