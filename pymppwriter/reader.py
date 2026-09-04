@@ -23,6 +23,7 @@ from typing import Dict, List, Optional
 from .cfb import load_cfb
 from . import blocks as B
 from .writer import (PRJ, NATIVE, RSC_NATIVE, ASSN_NATIVE, REL_TYPES, CONSTRAINT_TYPES,
+                     TASK_BASELINE_IDS, Baseline, WORK_SCALE,
                      TASK_META_SIZE, TASK_META2_SIZE, REL_META_SIZE, RSC_META_SIZE,
                      ASSN_META_SIZE, TENTHS_PER_DAY, UNITS_CODES, PCT_SCALE,
                      ESTIMATED_FLAG, Project, Task, Relation, Resource, Assignment,
@@ -170,6 +171,7 @@ def read_project(path: str) -> Project:
             wbs=tasks_k.text(uid, NATIVE["WBS"]) or None,
             constraint=constraint if constraint != "ASAP" else None,
             constraint_date=tasks_k.timestamp(i, NATIVE["CONSTRAINT_DATE"]),
+            baselines=_read_baselines(tasks_k, uid),
             percent_complete=tasks_k.value(i, NATIVE["PERCENT_COMPLETE"], "<H") or 0,
             priority=tasks_k.value(i, NATIVE["PRIORITY"], "<H") or 500,
             manual=tasks_k.flag(i, NATIVE["MANUALLY_SCHEDULED"]),
@@ -219,6 +221,38 @@ def read_project(path: str) -> Project:
         resources=resources,
         assignments=assignments,
     )
+
+
+def _read_baselines(tasks_k: _Klass, uid: int) -> Dict[int, Baseline]:
+    """Saved baselines for one task, by slot.
+
+    They live in var data — the fixed baseline fields stay empty in files
+    Project writes — and a cleared baseline keeps its entries with the dates
+    at NA and the numbers at zero, so those are skipped.
+    """
+    out: Dict[int, Baseline] = {}
+    for slot, ids in enumerate(TASK_BASELINE_IDS):
+        start = tasks_k.var(uid, ids["start"])
+        finish = tasks_k.var(uid, ids["finish"])
+        if start is None and finish is None:
+            continue
+        b = Baseline(
+            start=B.decode_timestamp(start, 0) if start else None,
+            finish=B.decode_timestamp(finish, 0) if finish else None,
+        )
+        dur = tasks_k.var(uid, ids["duration"])
+        if dur and len(dur) >= 4:
+            b.duration_days = round(struct.unpack("<i", dur[:4])[0] / TENTHS_PER_DAY, 4)
+        work = tasks_k.var(uid, ids["work"])
+        if work and len(work) >= 8:
+            b.work_hours = round(struct.unpack("<d", work[:8])[0] / (WORK_SCALE * 600), 4)
+        cost = tasks_k.var(uid, ids["cost"])
+        if cost and len(cost) >= 8:
+            b.cost = struct.unpack("<d", cost[:8])[0]
+        if b.start is None and b.finish is None and not b.duration_days and not b.work_hours:
+            continue                     # a cleared slot, not a saved one
+        out[slot] = b
+    return out
 
 
 def _read_relations(r: _Reader) -> List[Relation]:

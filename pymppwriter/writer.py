@@ -45,6 +45,41 @@ NUMBER_IDS = [87, 88, 89, 90, 91, 302, 303, 304, 305, 306, 307, 308, 309, 310,
 DATE_IDS = [265, 266, 267, 268, 269, 270, 271, 272, 273, 274]
 FLAG_IDS = [72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 292, 293, 294, 295, 296,
             297, 298, 299, 300, 301]
+# Baseline field ids per slot: index 0 is the unnumbered Baseline, 1-10 the
+# numbered ones. Baselines live in VAR data, not the fixed record — the fixed
+# baseline fields stay empty in files Project writes. The stride is irregular
+# (slot 6 jumps), so these are the real ids rather than arithmetic.
+TASK_BASELINE_IDS = [
+    {"start": 43, "finish": 44, "duration": 27, "units": 179, "work": 1, "cost": 6},
+    {"start": 482, "finish": 483, "duration": 487, "units": 488, "work": 485, "cost": 484},
+    {"start": 493, "finish": 494, "duration": 498, "units": 499, "work": 496, "cost": 495},
+    {"start": 504, "finish": 505, "duration": 509, "units": 510, "work": 507, "cost": 506},
+    {"start": 515, "finish": 516, "duration": 520, "units": 521, "work": 518, "cost": 517},
+    {"start": 526, "finish": 527, "duration": 531, "units": 532, "work": 529, "cost": 528},
+    {"start": 544, "finish": 545, "duration": 549, "units": 550, "work": 547, "cost": 546},
+    {"start": 555, "finish": 556, "duration": 560, "units": 561, "work": 558, "cost": 557},
+    {"start": 566, "finish": 567, "duration": 571, "units": 572, "work": 569, "cost": 568},
+    {"start": 577, "finish": 578, "duration": 582, "units": 583, "work": 580, "cost": 579},
+    {"start": 588, "finish": 589, "duration": 593, "units": 594, "work": 591, "cost": 590},
+]
+ASSN_BASELINE_IDS = [
+    {"start": 146, "finish": 147, "work": 16, "cost": 32},
+    {"start": 295, "finish": 296, "work": 289, "cost": 290},
+    {"start": 304, "finish": 305, "work": 298, "cost": 299},
+    {"start": 313, "finish": 314, "work": 307, "cost": 308},
+    {"start": 322, "finish": 323, "work": 316, "cost": 317},
+    {"start": 331, "finish": 332, "work": 325, "cost": 326},
+    {"start": 340, "finish": 341, "work": 334, "cost": 335},
+    {"start": 349, "finish": 350, "work": 343, "cost": 344},
+    {"start": 358, "finish": 359, "work": 352, "cost": 353},
+    {"start": 367, "finish": 368, "work": 361, "cost": 362},
+    {"start": 376, "finish": 377, "work": 370, "cost": 371},
+]
+# timephased baseline blobs, removed when a baseline is cleared
+TASK_BASELINE_TIMEPHASED = (173, 174)
+ASSN_BASELINE_TIMEPHASED = (52, 53)
+PROPS_BASELINE_SAVED = 37753749          # 0x2401395: when the baseline was set; NA when cleared
+
 CONSTRAINT_TYPES = {"ASAP": 0, "ALAP": 1, "MSO": 2, "MFO": 3,
                     "SNET": 4, "SNLT": 5, "FNET": 6, "FNLT": 7}
 TASK_TYPES = {"fixed_units": 0, "fixed_duration": 1, "fixed_work": 2}
@@ -215,7 +250,18 @@ class Task:
     number: Dict[int, float] = field(default_factory=dict)   # Number1-20
     date: Dict[int, datetime] = field(default_factory=dict)  # Date1-10
     flag: Dict[int, bool] = field(default_factory=dict)      # Flag1-20
+    baselines: Dict[int, "Baseline"] = field(default_factory=dict)   # slot -> snapshot
     guid: bytes = field(default_factory=lambda: uuid.uuid4().bytes_le)
+
+
+@dataclass
+class Baseline:
+    """One saved snapshot of a task's schedule (slot 0 = Baseline, 1-10 = Baseline1-10)."""
+    start: Optional[datetime] = None
+    finish: Optional[datetime] = None
+    duration_days: float = 0.0
+    work_hours: float = 0.0
+    cost: float = 0.0                    # the file's own units; scale not yet established
 
 
 @dataclass
