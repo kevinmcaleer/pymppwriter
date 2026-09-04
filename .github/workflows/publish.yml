@@ -1,0 +1,70 @@
+name: publish
+
+# Publishes to PyPI when a GitHub Release is published, so `pip install
+# pymppwriter` (and any Docker image that pins it) gets a real release rather
+# than a git URL. Uses PyPI Trusted Publishing: no API token lives in this
+# repository. One-time setup is in CONTRIBUTING.md.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Index to publish to
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version matches the tag
+        if: github.event_name == 'release'
+        run: |
+          version=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::pyproject version $version does not match tag $tag — bump one of them"
+            exit 1
+          fi
+          echo "Publishing version $version"
+
+      # a release that cannot pass its own tests should not reach PyPI
+      - run: pip install -e . pytest
+      - run: pytest -q
+
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi          # must match the environment on the PyPI publisher
+    permissions:
+      id-token: write          # mints the short-lived token Trusted Publishing uses
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+      - name: Publish to PyPI
+        if: github.event_name == 'release' || inputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1

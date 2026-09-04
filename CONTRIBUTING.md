@@ -38,3 +38,59 @@ These methods, in increasing order of power, produced every finding in
 
 Check your changes against the golden round-trip: generate a file, resave it
 in Project, and run `scripts/roundtrip_check.py generated.mpp resaved.mpp`.
+
+## Releasing to PyPI
+
+`.github/workflows/publish.yml` publishes when a GitHub Release is published.
+It uses **Trusted Publishing**, so no API token is stored in this repository —
+PyPI accepts a short-lived token minted for this workflow instead.
+
+### One-time setup (on PyPI, not here)
+
+1. Sign in to PyPI → **Your projects** → **Publishing** (for a name that has
+   never been published, use **Add a pending publisher**).
+2. Fill in:
+
+   | Field | Value |
+   |---|---|
+   | PyPI project name | `pymppwriter` |
+   | Owner | `kevinmcaleer` |
+   | Repository name | `pymppwriter` |
+   | Workflow name | `publish.yml` |
+   | Environment name | `pypi` |
+
+3. Repeat on [test.pypi.org](https://test.pypi.org) if you want the dry run.
+
+The environment name has to match the `environment: pypi` in the workflow, or
+PyPI rejects the token.
+
+### Cutting a release
+
+1. Bump `version` in `pyproject.toml` (the workflow fails if it does not match
+   the tag, so a forgotten bump cannot ship).
+2. Commit, then tag and push:
+
+   ```bash
+   git tag v0.3.0 && git push origin v0.3.0
+   ```
+
+3. Publish a GitHub Release for that tag. The workflow runs the tests, builds
+   the sdist and wheel, `twine check`s them and uploads.
+
+Dry run first with **Actions → publish → Run workflow → testpypi**, then
+
+```bash
+pip install --index-url https://test.pypi.org/simple/ pymppwriter
+```
+
+### Consuming it
+
+Once a version is on PyPI, dependants pin the release rather than a git URL —
+which is what lets a Docker build install it from the index and cache the
+layer. In NoodlePlanner, `packages/noodle-core/pyproject.toml`:
+
+```toml
+mpp = ["pymppwriter>=0.3"]
+```
+
+then `uv lock --upgrade-package pymppwriter`.
