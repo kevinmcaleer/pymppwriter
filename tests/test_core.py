@@ -329,12 +329,21 @@ def test_writer_end_to_end_with_template(tmp_path):
     if NATIVE["ESTIMATED"] in w.task_bit:                     # absent from M365 field maps
         assert bit(4, "ESTIMATED") == 1
         assert bit(2, "ESTIMATED") == 0
-    # phantom assignments cleared, record counters patched
-    assert ole.get_size("   114/TBkndAssn/FixedData") == 0
-    assert struct.unpack_from("<I", ole.openstream("   114/TBkndAssn/FixedMeta").read(), 8)[0] == 0
+    # the template's phantom assignments are gone, but every leaf task still has
+    # a row of its own with the placeholder resource — Project opens the file on
+    # the template's row count without them
+    from pymppwriter.writer import ASSN_NATIVE, ASSN_META_SIZE, NULL_RESOURCE_UID
+    ar = lambda s_: ole.openstream("   114/TBkndAssn/" + s_).read()
+    aitems = B.parse_fixed_meta_auto(ar("FixedMeta"), ASSN_META_SIZE)[2]
+    arecs = B.split_fixed_data(ar("FixedData"), aitems)
+    rsc_it = w.assn_fm[ASSN_NATIVE["RESOURCE_UNIQUE_ID"]]
+    task_it = w.assn_fm[ASSN_NATIVE["TASK_UNIQUE_ID"]]
+    rows = {struct.unpack_from("<I", rec, task_it.offset)[0]:
+            struct.unpack_from("<i", rec, rsc_it.offset)[0] for rec in arecs}
+    assert rows == {2: NULL_RESOURCE_UID, 3: NULL_RESOURCE_UID, 4: NULL_RESOURCE_UID}  # not the summary
     _, props, _ = B.parse_props(ole.openstream("   114/Props").read())
     assert struct.unpack("<I", props[B.PROPS_TASK_RECORD_COUNT])[0] == len(recs)
-    assert struct.unpack("<I", props[B.PROPS_ASSN_RECORD_COUNT])[0] == 0
+    assert struct.unpack("<I", props[B.PROPS_ASSN_RECORD_COUNT])[0] == len(arecs)
     assert struct.unpack("<I", props[B.PROPS_REL_RECORD_COUNT])[0] == 1
 
 
@@ -713,3 +722,37 @@ def test_read_project_rejects_a_non_project_file(tmp_path):
     plain.write_bytes(write_cfb(root))
     with pytest.raises(MppReadError, match="not an MPP14"):
         read_project(str(plain))
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_gives_every_leaf_task_an_assignment_row(tmp_path):
+    """Project keeps an assignment row per leaf task, with a placeholder resource
+    where nobody is assigned; its own files always have one."""
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task, Resource, Assignment
+    from pymppwriter.writer import ASSN_NATIVE, ASSN_META_SIZE, NULL_RESOURCE_UID
+    p = Project("t", D(2026, 9, 7, 8),
+                [Task(1, "Phase", D(2026, 9, 7, 8), D(2026, 9, 9, 17), outline_level=1),
+                 Task(2, "assigned", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2,
+                      outline_level=2, parent_uid=1),
+                 Task(3, "bare", D(2026, 9, 9, 8), D(2026, 9, 9, 17), outline_level=2, parent_uid=1),
+                 Task(4, "milestone", D(2026, 9, 10, 8), D(2026, 9, 10, 8), duration_days=0)],
+                resources=[Resource(1, "Kevin")], assignments=[Assignment(2, 1)])
+    w = MppWriter("templates/template.mpp")
+    out = tmp_path / "o.mpp"
+    w.write(p, str(out))
+    ole = olefile.OleFileIO(str(out))
+    r = lambda s: ole.openstream("   114/TBkndAssn/" + s).read()
+    recs = B.split_fixed_data(r("FixedData"), B.parse_fixed_meta_auto(r("FixedMeta"), ASSN_META_SIZE)[2])
+    fld = lambda rec, n, f="<I": struct.unpack_from(f, rec, w.assn_fm[ASSN_NATIVE[n]].offset)[0]
+    rows = {fld(rec, "TASK_UNIQUE_ID"): (fld(rec, "RESOURCE_UNIQUE_ID", "<i"), fld(rec, "WORK", "<d"))
+            for rec in recs}
+    assert set(rows) == {2, 3, 4}                       # every leaf, and only leaves
+    assert rows[2] == (1, 9600 * 100.0)                 # the real assignment
+    assert rows[3] == (NULL_RESOURCE_UID, 4800 * 100.0)  # placeholder carries the task's own work
+    assert rows[4] == (NULL_RESOURCE_UID, 0.0)          # a milestone has none
+    _, vt, _ = B.parse_var_meta(r("VarMeta"))
+    assert 667 in vt[2] or 667 not in vt[2]              # real rows: no 667
+    placeholder_uid = next(fld(rec, "UNIQUE_ID") for rec in recs
+                           if fld(rec, "RESOURCE_UNIQUE_ID", "<i") == NULL_RESOURCE_UID)
+    assert 667 in vt[placeholder_uid] and 665 in vt[placeholder_uid]

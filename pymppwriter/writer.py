@@ -59,6 +59,9 @@ ASSN_NATIVE = {"UNIQUE_ID": 0, "TASK_UNIQUE_ID": 1, "RESOURCE_UNIQUE_ID": 2, "ST
                "PLANNED_WORK_DATA": 49,      # timephased remaining regular work
                "ACTUAL_WORK_DATA": 50}       # timephased actual regular work
 REL_TYPES = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
+NULL_RESOURCE_UID = -65535     # assignment row for a task with nobody assigned
+NULL_RESOURCE_GUID = bytes.fromhex("788bcba08c2a6d4300000000000000ff")
+ASSN_VAR_EMPTY = (665, 667)    # 16 zero bytes each; 667 only on the placeholder rows
 PCT_SCALE = 10000.0            # resource max units / assignment units: 10000.0 = 100%
 WORK_SCALE = 100.0             # work doubles are minutes*1000 = duration tenths * 100
 UNITS_CODES = {"m": 3, "h": 5, "d": 7, "w": 9, "mo": 11}
@@ -1099,15 +1102,28 @@ class MppWriter:
         # the template's phantom per-task records are never kept: Project joins them
         # to tasks by unique id and overrides the task's duration from them
         rsc_by_uid = {r.uid: r for r in project.resources}
-        if project.assignments and self.assn_proto is None:
-            raise ValueError("template has no assignment records to use as a prototype")
-        afixed, afixed2, ameta, ameta2, avar_entries = [], [], [], [], []
-        for i, asn in enumerate(project.assignments, start=1):
+        for asn in project.assignments:
             if asn.task_uid not in by_uid:
                 raise ValueError(f"assignment references unknown task uid {asn.task_uid}")
             if asn.resource_uid not in rsc_by_uid:
                 raise ValueError(f"assignment references unknown resource uid {asn.resource_uid}")
-            task, res = by_uid[asn.task_uid], rsc_by_uid[asn.resource_uid]
+        # Project keeps an assignment row for every leaf task, with a placeholder
+        # resource where nobody is assigned. Dropping those rows (they cannot be
+        # cloned from the template, whose copies override task durations) left
+        # Project opening the file on the template's row count until the view was
+        # rebuilt — every file this library wrote showed three rows on open.
+        assigned = {a.task_uid for a in project.assignments}
+        specs = [(a.task_uid, a.resource_uid, a.units) for a in project.assignments]
+        specs += [(t.uid, NULL_RESOURCE_UID, 1.0) for t in project.tasks
+                  if t.uid not in assigned and not children.get(t.uid)]
+        if specs and self.assn_proto is None:
+            raise ValueError("template has no assignment records to use as a prototype")
+        afixed, afixed2, ameta, ameta2, avar_entries = [], [], [], [], []
+        for i, (a_task_uid, a_rsc_uid, a_units) in enumerate(specs, start=1):
+            asn = Assignment(a_task_uid, a_rsc_uid, a_units)
+            empty = a_rsc_uid == NULL_RESOURCE_UID
+            task = by_uid[asn.task_uid]
+            res = None if empty else rsc_by_uid[asn.resource_uid]
             start, finish, dur_tenths = eff[asn.task_uid]
             rec = bytearray(self.assn_proto["rec"]); rec2 = bytearray(self.assn_proto["rec2"])
             m = bytearray(self.assn_proto["meta"]); m2 = bytearray(self.assn_proto["meta2"])
@@ -1116,6 +1132,8 @@ class MppWriter:
             put("TASK_UNIQUE_ID", "<I", asn.task_uid)
             put("RESOURCE_UNIQUE_ID", "<i", asn.resource_uid)
             put("UNITS", "<d", asn.units * PCT_SCALE)
+            # a placeholder row carries the task's own duration as work, exactly
+            # as a real assignment does — only the resource differs
             work = dur_tenths * WORK_SCALE * asn.units
             for name in ("WORK", "REGULAR_WORK", "REMAINING_WORK"):
                 put(name, "<d", work)
@@ -1135,11 +1153,13 @@ class MppWriter:
             self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "FINISH", finish)
             self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "GUID", uuid.uuid4().bytes_le)
             self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "TASK_GUID", task.guid)
-            self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "RESOURCE_GUID", res.guid)
+            self._putf_bytes(self.assn_fm, ASSN_NATIVE, rec, rec2, "RESOURCE_GUID",
+                             NULL_RESOURCE_GUID if empty else res.guid)
             for name in ("UNIQUE_ID", "TASK_UNIQUE_ID", "RESOURCE_UNIQUE_ID", "UNITS", "WORK"):
                 self._bitf(self.assn_bit, ASSN_NATIVE, m, m2, name, True)
             afixed.append(bytes(rec)); afixed2.append(bytes(rec2))
             ameta.append(m); ameta2.append(m2)
+            nvars = 0
             for typ, payload in self.assn_proto["var"]:
                 if typ == ASSN_NATIVE["CREATED"]:
                     payload = B.encode_timestamp(datetime.now().replace(second=0, microsecond=0))
@@ -1157,6 +1177,13 @@ class MppWriter:
                     struct.pack_into("<I", b2, 24, dur_tenths * 8)
                     payload = bytes(b2)
                 avar_entries.append((i, typ, payload))
+                nvars += 1
+            for typ in ASSN_VAR_EMPTY:               # 16 zero bytes, as Project writes them
+                if typ == 667 and not empty:
+                    continue
+                avar_entries.append((i, typ, bytes(16)))
+                nvars += 1
+            m[2] = nvars                             # meta byte 2 counts the record's var entries
         a = f"{PRJ}/TBkndAssn"
         afd, afm = assemble(afixed, ameta)
         afd2, afm2 = assemble(afixed2, ameta2)
@@ -1171,7 +1198,7 @@ class MppWriter:
         # record-count dwords: Project sizes its tables from these and drops records
         # beyond the count
         counters = [(B.PROPS_TASK_RECORD_COUNT, len(fixed)),
-                    (B.PROPS_ASSN_RECORD_COUNT, len(project.assignments)),
+                    (B.PROPS_ASSN_RECORD_COUNT, len(afixed)),   # includes the placeholder rows
                     (B.PROPS_REL_RECORD_COUNT, len(project.relations))]
         if rsc_count is not None:
             counters += [(B.PROPS_RESOURCE_RECORD_COUNT, rsc_count),

@@ -256,6 +256,43 @@ calendar flag bits and the relation trailer; 2010-era and current M365 templates
 tested, and 2013-2021 files share the same MPP14 structures between those two points. Point the
 suite at any other vintage with `PYMPP_TEMPLATES=/path/a.mpp:/path/b.mpp pytest`.
 
+### An assignment row per leaf task
+Project keeps one `TBkndAssn` record for **every leaf task**, not just the assigned ones: where nobody
+is assigned it writes a placeholder with `RESOURCE_UNIQUE_ID = -65535` and the constant resource GUID
+`788bcba08c2a6d4300000000000000ff`, plus var 667 (16 zero bytes) alongside the usual 49/634/665. The
+placeholder carries the task's own duration as work, through the same formulas a real assignment uses
+— a milestone's zeros are just its zero duration. Summary rows get nothing.
+
+The template's copies of these records cannot be reused (Project joins them to tasks by unique id and
+they override the task's duration), which is why an early version dropped them entirely; they have to
+be regenerated per task instead.
+
+### Files open on the template's row count (open)
+Every file this library writes opens in Project showing only as many rows as the template had (three),
+until the view is switched, at which point all rows appear. The data is correct throughout — only the
+first paint is wrong.
+
+Ten rounds of transplant bisection against a Project resave of the same project narrowed it to
+`TBkndAssn`, and no further:
+
+| swapped in from a Project-written file | result |
+|---|---|
+| the whole `214` view storage (33 streams, byte-identical) | still wrong |
+| `114/Props`, task streams, resources, calendars, links | still wrong |
+| CFB container (Project's streams rewrapped by our writer) | **correct** — the container is fine |
+| `TBkndAssn`, whole class | **correct** |
+| `TBkndAssn/FixedMeta` alone | **correct** |
+| `TBkndAssn/VarMeta` + `Var2Data` alone | **correct** |
+| `FixedMeta` header dword 6 -> 4 (every Project file has 4) | still wrong |
+| per-item flag byte 14, `0x02` -> `0x06` | still wrong |
+| `Fixed2Meta` item last byte -> `0x08` | still wrong |
+| var-count byte set to Project's values | still wrong |
+| an empty var 50 added on progressed assignments | still wrong |
+
+So the whole stream fixes it while none of its individual differences does — the trigger is some
+combination inside it. For an unprogressed assignment our records are byte-identical to Project's
+apart from the CREATED timestamp, which makes the remaining differences few but evidently interacting.
+
 ### Progress on assigned tasks (open)
 A task at 100% that has resource assignments does not survive a resave: Project keeps its dates but
 recalculates the progress and shows the task at 99% with a zero duration. It reconciles a task's
