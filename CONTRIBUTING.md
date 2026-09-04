@@ -83,6 +83,44 @@ Dry run first with **Actions → publish → Run workflow → testpypi**, then
 pip install --index-url https://test.pypi.org/simple/ pymppwriter
 ```
 
+## Releasing to npm
+
+The repo ships two packages, and the tag prefix decides which one a release
+publishes:
+
+| tag | package | index |
+|---|---|---|
+| `v0.3.1` | `pymppwriter` (Python) | PyPI |
+| `js-v0.1.0` | `mppwriter` (`js/`) | npm |
+
+`.github/workflows/npm-publish.yml` uses **npm Trusted Publishing**, so no token
+lives here either, and the published package carries provenance.
+
+### One-time setup (on npmjs.com)
+
+1. Sign in → the `mppwriter` package → **Settings** → **Trusted publisher**. For
+   a name never published, publish once manually or add the publisher when the
+   package is created.
+2. Fill in:
+
+   | Field | Value |
+   |---|---|
+   | Organization or user | `kevinmcaleer` |
+   | Repository | `pymppwriter` |
+   | Workflow filename | `npm-publish.yml` |
+
+### Cutting a release
+
+1. Bump `version` in `js/package.json` (the workflow fails on a mismatch).
+2. Tag and push, then publish the GitHub Release for that tag:
+
+   ```bash
+   git tag js-v0.1.0 && git push origin js-v0.1.0
+   ```
+
+**Actions → npm-publish → Run workflow** does a dry run: it installs, typechecks,
+tests, builds and prints `npm pack --dry-run` without publishing.
+
 ### Consuming it
 
 Once a version is on PyPI, dependants pin the release rather than a git URL —
