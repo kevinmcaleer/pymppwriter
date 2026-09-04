@@ -1,0 +1,1320 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Write Microsoft Project .mpp files from pure Python">
+      
+      
+      
+        <link rel="canonical" href="https://kevinmcaleer.github.io/pymppwriter/FORMAT_NOTES/">
+      
+      
+        <link rel="prev" href="../examples/">
+      
+      
+        <link rel="next" href="../contributing/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>MPP format notes - pymppwriter</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#mpp14-format-notes-dirty-room-output" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="pymppwriter" class="md-header__button md-logo" aria-label="pymppwriter" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            pymppwriter
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              MPP format notes
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/kevinmcaleer/pymppwriter" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="pymppwriter" class="md-nav__button md-logo" aria-label="pymppwriter" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    pymppwriter
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/kevinmcaleer/pymppwriter" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MPP format notes
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MPP format notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#container" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Container
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#props-stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Props stream
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#field-map-entry-28-bytes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Field map entry (28 bytes)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed-blocks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed blocks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#var-blocks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Var blocks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#primitives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Primitives
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependencies-tbkndcons" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependencies (TBkndCons)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resources-tbkndrsc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resources (TBkndRsc)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#assignments-tbkndassn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Assignments (TBkndAssn)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#calendars-tbkndcal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Calendars (TBkndCal)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verified-against-microsoft-project-m365-sep-2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verified against Microsoft Project (M365, Sep 2026)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-properties-and-document-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project properties and document metadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#round-trip-fidelity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round-trip fidelity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Round-trip fidelity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#baselines-live-in-var-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Baselines live in var data
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#an-assignment-row-per-leaf-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An assignment row per leaf task
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-open-on-the-templates-row-count-open" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files open on the template's row count (open)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#progress-on-assigned-tasks-open" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Progress on assigned tasks (open)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#not-yet-handled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Not yet handled
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#container" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Container
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#props-stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Props stream
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#field-map-entry-28-bytes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Field map entry (28 bytes)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed-blocks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed blocks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#var-blocks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Var blocks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#primitives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Primitives
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependencies-tbkndcons" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependencies (TBkndCons)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resources-tbkndrsc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resources (TBkndRsc)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#assignments-tbkndassn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Assignments (TBkndAssn)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#calendars-tbkndcal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Calendars (TBkndCal)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verified-against-microsoft-project-m365-sep-2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verified against Microsoft Project (M365, Sep 2026)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-properties-and-document-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project properties and document metadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#round-trip-fidelity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round-trip fidelity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Round-trip fidelity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#baselines-live-in-var-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Baselines live in var data
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#an-assignment-row-per-leaf-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An assignment row per leaf task
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-open-on-the-templates-row-count-open" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files open on the template's row count (open)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#progress-on-assigned-tasks-open" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Progress on assigned tasks (open)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#not-yet-handled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Not yet handled
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="mpp14-format-notes-dirty-room-output">MPP14 format notes (dirty-room output)</h1>
+<p>Derived from: the public [MS-CFB] spec, the LGPL MPXJ reader's observable behaviour,
+and byte-diffing of MPP14 files. No proprietary code was consulted.</p>
+<h2 id="container">Container</h2>
+<p>OLE2 / MS-CFB v3: 512-byte sectors, 64-byte mini sectors, 4096-byte mini-stream cutoff.
+Root entry CLSID = <code>74B78F3A-C8C8-11D1-BE11-00C04FB6FAF1</code> (Project). Project detects the
+file by this CLSID + the <code>Props14</code> stream, not by extension.</p>
+<p><div class="highlight"><pre><span></span><code>\x01CompObj, \x05SummaryInformation (title/author), \x05DocumentSummaryInformation
+Props14                      version header (492 bytes)
+   114/                      "project" storage  (name is 3 spaces + 114)
+   114/Props                 project properties (~85 KB) incl. FIELD MAPS (see below)
+   114/TBkndTask/            tasks
+   114/TBkndRsc/             resources
+   114/TBkndAssn/            assignments
+   114/TBkndCal/             calendars
+   114/TBkndCons/            dependencies ("constraints" = links)
+   114/TBkndOutlCode/        outline codes / lookup tables
+   214/                      "view" storage: CV_iew, CTable, CFilter, CGrouping, CEdl, CReport, CMap, CUdm, CCommandBar, CVba, Props
+</code></pre></div>
+Each <code>TBknd*</code> storage holds the same six streams:
+<code>FixedMeta</code>, <code>FixedData</code>, <code>Fixed2Meta</code>, <code>Fixed2Data</code>, <code>VarMeta</code>, <code>Var2Data</code> (+ optional <code>Props</code>).</p>
+<h2 id="props-stream">Props stream</h2>
+<p>16-byte header: <code>uint32 (streamLen-4), uint32 (streamLen-4), uint32 unk, uint16 entryCount, uint16 unk</code>.
+<strong>Both size dwords must be updated when any entry changes length</strong> — Project rejects the file otherwise.
+Entries: <code>uint32 size, uint32 key, uint32 typeCode, bytes[size]</code>, 2-byte aligned. typeCode (0/2/4/9 observed)
+<strong>must be preserved</strong> — Project rejects the file if it is zeroed. Type-0 strings are UTF-16LE + <strong>4</strong> NUL bytes.
+Keys of interest:</p>
+<table>
+<thead>
+<tr>
+<th>key</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>131092</td>
+<td>TASK_FIELD_MAP (977 × 28-byte entries)</td>
+</tr>
+<tr>
+<td>131093</td>
+<td>RESOURCE_FIELD_MAP</td>
+</tr>
+<tr>
+<td>131094</td>
+<td>RELATION_FIELD_MAP</td>
+</tr>
+<tr>
+<td>131095</td>
+<td>ASSIGNMENT_FIELD_MAP</td>
+</tr>
+<tr>
+<td>16777217</td>
+<td>task record count (uint32, incl. deleted-task stubs and the uid-0 summary)</td>
+</tr>
+<tr>
+<td>16777218</td>
+<td>resource record count</td>
+</tr>
+<tr>
+<td>16777220</td>
+<td>assignment record count</td>
+</tr>
+<tr>
+<td>16777221</td>
+<td>relation record count</td>
+</tr>
+<tr>
+<td>37748738</td>
+<td>PROJECT_START_DATE (4-byte timestamp)</td>
+</tr>
+<tr>
+<td>37748744</td>
+<td>TITLE</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The record counts must match the streams</strong>: Project sizes its tables from them on load and
+silently drops records beyond the count (verified in Project M365 — the last task vanished
+while the count was one short).</p>
+<h2 id="field-map-entry-28-bytes">Field map entry (28 bytes)</h2>
+<p><code>+0 uint32 mask | +4 uint16 fixedOffset (65535 = not in fixed) | +6 byte varKey | +12 uint32 nativeFieldId | +20 uint16 category</code></p>
+<p>Native field ID = <code>0x0B40xxxx</code> (task), <code>0x0C40xxxx</code> (resource), <code>0x0F40xxxx</code> (assignment); low 16 bits index
+<code>native_fields.json</code>. Category: <code>02</code> uint16, <code>03</code> int32, <code>05</code> double, <code>13</code> timestamp, <code>48</code> GUID, <code>65</code> double (work/cost),
+<code>0B</code>/<code>64</code> = boolean stored as a bit in FixedMeta/Fixed2Meta (mask column), <code>08</code> string (in Var2Data).
+A drop in fixedOffset marks the switch from FixedData (block 0) to Fixed2Data (block 1).
+<strong>The writer reads the template's own field map, so offsets are never hard-coded.</strong></p>
+<h2 id="fixed-blocks">Fixed blocks</h2>
+<p><code>FixedMeta</code>: <code>uint32 magic 0xFADFADBA, uint32 4, uint32 itemCount, uint32 fixedDataByteLen</code> then
+itemCount × N-byte items. <strong>Both count and data-length dwords must be updated</strong> when records change.
+Item bytes +4..+8 = uint32 offset of the record in <code>FixedData</code>.
+Item sizes vary by Project vintage — derive them from <code>(streamLen - 16) / itemCount</code> (exact division;
+fall back to defaults when trailing slack makes it inexact). 2010-era: task 47 / 92 (meta2),
+resource 37 / 50, assignment 34 / 53, relation 10 / <strong>9</strong>, calendar 10 / 9. M365: task Fixed2Meta
+<strong>96</strong>, resource Fixed2Meta <strong>51</strong>, calendar Fixed2Meta <strong>10</strong>; the rest unchanged
+(the 9-byte relation meta2 item is offset dword + one trailing byte, 0x07 observed).
+<code>FixedData</code> is the concatenation of records; record size = next offset − this offset.</p>
+<p><strong>Meta item bitmap</strong> (the bytes after the offset dword): one bit per TASK_FIELD_MAP <em>entry</em>,
+little-endian bit order, indexed by the entry's position in the field map. The task FixedMeta item
+carries entries 0..311 ((47−8)×8), Fixed2Meta continues at 312. Boolean fields (category 0x0B/0x64 —
+MILESTONE, SUMMARY, ESTIMATED, TASK_MODE, FLAG1-20…) store their <strong>value</strong> in their entry's bit; for
+value fields the bit appears to mark the field as populated. Verified on three Project-written files
+(entry order differs per file — Project reorders the field map — and the bits follow the entries:
+e.g. NAME was entry 100 with bit 100 set in all files; SUMMARY at entry 10/35 matched summary rows;
+MILESTONE at entry 5/17 matched milestone rows). Because entry order is file-specific, bit positions
+must be derived from the file's own field map, never hard-coded.
+Meta item bytes +0..+4: unknown flags (byte 2 varies per file: 0x0A–0x17 observed); cloned verbatim.</p>
+<p>Task record (block 0, 206 bytes in the reference) — key offsets from the field map (file-specific;
+heavily edited files lay these out differently):
+<code>0 UID, 4 ID, 8 EarlyFinish, 12 LateStart, 24 FreeSlack, 36 ParentUID, 40 OutlineLevel(u16), 42 Duration,
+46 ActualDurationUnits, 48 ActualDuration, 52 RemainingDuration, 56 ConstraintType, 64 Start, 68 Finish,
+72 ActualStart, 80 ConstraintDate, 88 Priority, 94 Type, 98 Created, 106 EarlyStart, 110 LateFinish,
+126 Work(double), 150 Cost(double)</code>.
+The units word at +46 (ACTUAL_DURATION_UNITS): unit code 3 min / 5 h / 7 d / 9 w / 11 mo, +0x20 =
+estimated (the "?" suffix); summary rows carry 0x15 instead of a unit code.
+Block 1 (64 bytes): <code>0 GUID, 16 double position, 24 ParentGUID, 50 Start(rollup), 54 Finish(rollup),
+58 ManualDuration, 62 ManualDurationUnits</code>. Summary/milestone/estimated flags are meta bitmap bits
+(see above), not Fixed2Data bytes.
+Manual vs auto scheduling: the flag M365 Project actually reads is <strong>native id 1408's</strong> bitmap bit
+(1 = manually scheduled); the classic id 1280 "TASK_MODE" bit stays set in both modes. Auto tasks
+carry -1/null in the block-1 manual start/finish/duration fields. M365 templates default new tasks
+to manually scheduled, so a writer must clear 1408's bit explicitly. ESTIMATED (396) has no entry in
+M365 field maps — the estimated flag lives in the units word alone there.
+Deleted tasks are 16-byte stubs (<code>UID 0xFFFF0000+n</code>) kept at the front of the block.</p>
+<h2 id="var-blocks">Var blocks</h2>
+<p><code>VarMeta</code>: 24-byte header (<code>magic, 0, entryCount, 0, 0, var2DataSize</code>) then 12-byte entries <code>uint32 uid, uint32 offset, uint16 fieldLo, uint16 fieldHi</code>
+where fieldHi is the class prefix (<strong>0x0B40 tasks</strong>, 0x0C40 resources, 0x0F40 assignments) — Project ignores the entry
+(names vanish) if this is 0. Entries are sorted by (uid, field).
+<code>Var2Data</code>: at each offset <code>uint32 size, bytes[size]</code>. Strings are UTF-16LE, NUL-terminated. Task name key = 14.
+Project writes 10 var entries per task (baseline/deliverable placeholders); the writer clones them.</p>
+<h2 id="primitives">Primitives</h2>
+<ul>
+<li>Timestamp (4 bytes): <code>uint16 tenthsOfMinute, uint16 daysSince1983-12-31</code>; <code>FFFFFFFF</code> = null.</li>
+<li>Duration: int32 in tenths of a minute (1 day = 4800). Unit codes: 3 min, 5 h, 7 d, 9 w, 11 mo (+1 = elapsed).</li>
+<li>Work: double in <strong>thousandths of a minute</strong> (1 day = 480000.0) — task and assignment records alike
+  (verified against a Project-saved file; an earlier note claiming tenths was wrong). Cost: double.</li>
+<li>Percent-style values (max units, assignment units): double, 10000.0 = 100%.</li>
+<li>GUID: 16 bytes little-endian (Python <code>uuid.bytes_le</code>).</li>
+</ul>
+<h2 id="dependencies-tbkndcons">Dependencies (TBkndCons)</h2>
+<p>FixedData record 20 bytes: <code>uint32 uid, uint32 predUID, uint32 succUID, uint16 type (0 FF,1 FS,2 SF,3 SS), uint16 lagUnits, int32 lag</code>.
+Fixed2Data record 48 bytes: <code>GUID link, GUID pred, GUID succ</code>.</p>
+<h2 id="resources-tbkndrsc">Resources (TBkndRsc)</h2>
+<p>Layout from RESOURCE_FIELD_MAP (native class 0x0C40). Record ~188 bytes; key fields:
+<code>0 UNIQUE_ID, 4 ID, 44 MAX_UNITS (double, 10000.0 = 100%), 28 STANDARD_RATE (double)</code>, plus the work/cost
+doubles; block 1 (40 bytes): <code>0 GUID, 16 double position (row order, uid 0 = 1.0), 24 CALENDAR_GUID</code>.
+Field id 56 (int32 at +16) = the uid of the resource's calendar record in TBkndCal.
+Name (id 1), initials (2), email (35) are Var2Data strings keyed by native id.
+Every project — even a blank one — contains 3 deleted stubs plus a full-size <strong>uid-0 "Unassigned"
+resource record</strong>, which is the writer's prototype. A resource's GUID, its CALENDAR_GUID and its
+calendar record's GUID are all the same GUID.</p>
+<h2 id="assignments-tbkndassn">Assignments (TBkndAssn)</h2>
+<p>Layout from ASSIGNMENT_FIELD_MAP (0x0F40). FixedData record 110 bytes:
+<code>0 UNIQUE_ID, 4 TASK_UNIQUE_ID, 8 RESOURCE_UNIQUE_ID (int32; 0xFFFF0001 = unassigned), 12 Start, 16 Finish,
+20 Resume, 36 Stop, 46 ASSIGNMENT_UNITS (double, 10000.0 = 100%), 54 WORK (double, minutes × 1000 =
+duration tenths × 100), 70 REGULAR_WORK, 78 REMAINING_WORK</code>.
+Fixed2Data record 48 bytes: <code>GUID assignment, GUID task, GUID resource</code> — the join keys Project uses.
+Meta item sizes 34 / 53. <strong>Project schedules an assigned task from its assignment records</strong> (joined by
+task unique id), <em>not</em> from the task's own duration/work fields — which is why the template's phantom
+unassigned records (one per task, all 1 day) must never be cloned unpatched. On save Project recreates
+one phantom (resource uid 0xFFFF0001, units 100%, work = task duration × 100) per unassigned task, and
+an all-zero assignment uid 1 for the project summary; omitting them is tolerated.
+Var entries per assignment: keys 16, 32 (baseline work/cost), 146, 147 (baseline start/finish),
+267, 665, 634 = creation timestamp, and <strong>49 = the planned-work contour Project actually schedules
+from</strong>: <code>+8 double = units × 16</code> (160000.0 at 100%), <code>+16 double = total work (milli-minutes)</code>,
+<code>+24 uint32 = elapsed assignment duration in tenths × 8</code>, <code>+32 uint32 = contour block count (1)</code>.
+Getting +24 wrong (e.g. work×0.08, which coincides at 100% units) makes Project display and reschedule
+the task to the wrong duration.</p>
+<h2 id="calendars-tbkndcal">Calendars (TBkndCal)</h2>
+<p>FixedData: 16-byte deleted stubs, then 12-byte records of three int32 columns: calendar uid, base
+calendar uid, owning resource uid (-1s — or 0 for the base column in fresh M365 files — for a base
+calendar like Standard). <strong>Column order varies by Project version</strong> — (uid, base, resource) in
+2010-era files, (base, resource, uid) in M365 files — so detect it from the uid-0 resource's calendar
+row: its three values (its own calendar uid from the resource record's CALENDAR_UID field, the
+Standard uid, and resource uid 0) are distinct and identify every column.
+Fixed2Data record 48 bytes: <code>GUID calendar (= the owning resource's GUID), GUID calendar again, GUID of
+the base calendar</code> (zeros for Standard's own row beyond the first). Meta items 10 / 9-10 bytes.
+Each resource needs its own calendar record (base = Standard); new base calendars use -1 for both the
+base and resource columns.</p>
+<p>Var2Data per calendar: <strong>key 1 = name</strong> (UTF-16), <strong>key 8 = the definition blob</strong>. A calendar with no
+blob uses Project's built-in defaults (Mon-Fri 08:00-12:00, 13:00-17:00). Blob layout (the dialect
+Project M365 writes and reads; an older form using day type 2 for working days is readable by MPXJ
+but <strong>ignored by Project</strong>):
+* 7 × 60-byte day blocks, <strong>Sunday first</strong>: <code>uint16 dayType (1 = default, 0 = explicit — working vs
+  non-working decided by the range count), uint16 rangeCount, uint32 total working tenths at +4</code>,
+  range start times as uint16 tenths-of-a-minute from midnight at +8 (stride 2), range durations as
+  uint32 tenths at +20 (stride 4) and cumulative durations at +40. Up to 5 ranges.
+* then optionally <code>uint32 exceptionCount</code> and per exception: a 92-byte record — <code>uint16 fromDay,
+  uint16 toDay</code> (days since 1983-12-31), <code>uint16 dayCount</code>, recurrence dwords <code>1, 0, 1, 0x4000</code> at
+  +72 (zeroes make readers reject the exception), <code>uint32 nameByteLen</code> at +88 — followed by the
+  UTF-16 name, zero-padded so the next record starts 4-byte aligned, with 4 closing zero bytes after
+  the last. Exceptions are sorted by date; only non-working exceptions are understood so far.</p>
+<p><strong>Three gates decide whether Project reads a base calendar's blob at all</strong> (each was found the hard
+way; without any one of them the file opens but shows default working time):
+1. the record's meta item: flags byte 2 = the record's var entry count, and the trailing byte must
+   carry the has-data flag — <strong>0x80 in 2010-era metas, 0x40 in M365 ones</strong> (name-plus-data is 0xCF
+   in both, so OR 0xC0);
+2. Props key 65539 (0x10003) = the TBkndCal Var2Data byte length — Project truncates its var-data
+   read at the declared length (keys 65537/65538/65540 do the same for tasks/resources/assignments);
+3. Props key 8388609 (0x800001) = count of base calendars with custom working time (resource-calendar
+   blobs load regardless of it).
+The default project calendar is referenced <strong>by name</strong> in Props key 37748750 (UTF-16 + 4 NUL).
+A task's calendar is CALENDAR_UNIQUE_ID (native id 401, int32) in its fixed record plus the presence
+bit; -1/absent = project default. Props key 37753736 (0x2401388) holds a static 420-byte default-week
+definition (identical in every file observed; not where edits go).</p>
+<h2 id="verified-against-microsoft-project-m365-sep-2026">Verified against Microsoft Project (M365, Sep 2026)</h2>
+<p>Container writer, task records, hierarchy, FS links, Props start date and title all open cleanly by double-click.
+Durations verified correct, including display units (days/weeks), the estimated "?" flag, 0-day milestones and
+working-time summary rollups.</p>
+<p>The "every task shows 1 day?" defect had three causes, found by A/B tests in Project:
+1. <strong>Phantom assignments</strong>: the template's TBkndAssn records (one per template task, 1 day of work each) are
+   joined to tasks by task unique id, and Project overrides the task's duration from the assignment. MPXJ
+   ignores them, which is why the MPXJ oracle always read the written durations correctly while Project did
+   not. The writer now empties TBkndAssn.
+2. <strong>Stale record counts</strong> in Props (see table above) made Project drop task records beyond the template's
+   count and load the template's relation/assignment counts.
+3. The units word / estimated flag and the boolean meta-bitmap bits (milestone/summary/estimated) had to be
+   written per task — Project honours them exactly as described above.</p>
+<h2 id="project-properties-and-document-metadata">Project properties and document metadata</h2>
+<p>Props stream keys: 0x2400002 project start, <strong>0x2400003 project finish</strong>, 0x2400006 creation date,
+0x2400007 last-saved date, <strong>0x2400045 status date</strong> (0xFFFFFFFF = NA; located by fuzzing every NA
+key with distinct timestamps and reading the result back), 0x2400010 currency symbol and 0x24013BB
+currency code (UTF-16 short strings), 37748750 default calendar name.
+<strong>0x24000AE (2010-era only)</strong> holds legacy next-unique-id counters; stale values make Project
+renumber task uids on open (observed: uid 10 → 7), and M365 deletes the key on save — so the writer
+drops it. M365 files carry no next-uid counters at all: Project derives them from the loaded records.
+Document metadata lives in the root <code>\x05SummaryInformation</code> property set (MS-OLEPS, VT_LPSTR
+cp1252): pid 2 title, 3 subject, 4 author, 5 keywords, 6 comments, 8 last author, 12/13 created/saved
+FILETIMEs — and <code>\x05DocumentSummaryInformation</code> section 0: pid 14 manager, 15 company, 2 category.
+<code>Props14</code> (root stream) is the provenance/version block: length-prefixed UTF-16 entries with the
+creating and saving application versions ("16,0,20326,20112" = M365; "14,0,4751,1000" = Project
+2010), the username and the original file title. Kept verbatim from the template — it is what
+declares the file's era, which several structures' dialects key off.</p>
+<h2 id="round-trip-fidelity">Round-trip fidelity</h2>
+<p>Two engine behaviours matter when Project recalculates an opened file:
+* an auto-scheduled ASAP task snaps back to its earliest date, so the writer pins declared starts
+  with a Start-No-Earlier-Than constraint — the same thing Project does when a user types a start
+  date. Only dates the links do not already produce are pinned: <code>link_driven_start()</code> works out
+  where each predecessor puts its successor (FS to the next working moment after the finish, or
+  onto the finish itself for a zero-duration milestone; SS to the predecessor's start; FF and SF
+  drive the finish, not the start), and a task sitting exactly there is left ASAP so the plan stays
+  link-driven the way a hand-built one is;
+* the unmapped relation-record trailer moved between eras: 2010 files use <code>type@12, lagUnits@14,
+  lag@16</code>, M365 files <code>type@12, lag@14, lagUnits@18</code> (writing the 2010 shape into an M365 file put
+  the units code 7 into the lag field = 42-second successor slips). The era is detected from the
+  relation field map (native id 9 at offset 0 = 2010).
+Three more came out of the first full golden round (a file exercising every feature, resaved in
+Project M365):
+* <strong>task starts must be working moments.</strong> A start of 12:00 (the end of the morning window) or the
+  end of a half day is not a start Project accepts — it rolls the task on to 13:00 or the next
+  morning. <code>next_working_moment()</code> normalises link-derived starts, and a declared start in
+  non-working time raises a <code>ScheduleWarning</code>.
+* <strong>progress marks are an era pair.</strong> M365 keeps the task's own start in native 387 and the working
+  moment before it in native 1255; 2010-era files map only 387, holding that earlier moment.
+  Summary rows carry neither. Cloning the template's values instead put the day the template was
+  saved on every row.
+* <strong>an assignment's stop/resume follow the work.</strong> Project's own files put <code>STOP</code>/<code>RESUME</code> (ids
+  264/24) at the point work has reached — the finish on a completed assignment — where we left
+  both at the task's start.
+<code>scripts/roundtrip_check.py</code> compares a generated file against a Project-resaved copy through MPXJ
+(tasks, resources, assignments; rows added in Project are allowed) — both findings above came out of
+its first run. The Gantt scroll position is a timestamp inside <code>214/CV_iew/Var2Data</code> equal to the
+template's project start; the writer retargets it to the new start so files open on the schedule.
+Two disagreements with the scheduling engine are caught before Project sees them, as
+<code>ScheduleWarning</code>s: a declared start <em>earlier</em> than the links allow (Project moves it on the next
+recalculation — no constraint can hold a task before its predecessor), and a task calendar sharing
+no working time with its assigned resources' calendars (Project opens with "Not enough common
+working time" and schedules the task ignoring the resource calendar).
+Templates of different Project vintages are handled by deriving meta item sizes from stream headers,
+reading every layout from the file's own field maps, and era-detecting the calendar record columns,
+calendar flag bits and the relation trailer; 2010-era and current M365 templates are round-trip
+tested, and 2013-2021 files share the same MPP14 structures between those two points. Point the
+suite at any other vintage with <code>PYMPP_TEMPLATES=/path/a.mpp:/path/b.mpp pytest</code>.</p>
+<h3 id="baselines-live-in-var-data">Baselines live in var data</h3>
+<p>Setting a baseline in Project writes <strong>variable-data entries</strong>, not the fixed record fields — the 176
+baseline entries in the task field map are almost all var, and the fixed ones stay empty in files
+Project writes (only <code>BASELINE_FIXED_COST_ACCRUAL</code> carries a value, and it is a default present
+before any baseline).</p>
+<p>Per task, slot 0 (the unnumbered Baseline) is ids 43 start, 44 finish, 27 duration in tenths, 179
+duration units, 1 work in milli-minutes, 6 cost, plus deliverable dates (1174/1175) and budget
+work/cost (1176/1177) that Project leaves at NA. Slots 1-10 mirror those at their own ids — 482-492
+for Baseline1 and so on, with an irregular stride (slot 6 jumps from 526 to 544), so the ids are
+tabulated in <code>writer.py</code> rather than computed.</p>
+<p>Assignments carry the same snapshot without a duration: 146 start, 147 finish, 16 work, 32 cost,
+then a regular stride of 9 for the numbered slots (295/296/289/290 for Baseline1). <strong>Resources carry
+only work and cost</strong> — Project writes no baseline start or finish on a resource — at 15 and 17, with
+a stride of 10 (342/343 for Baseline1). The field map shows that stride in its own gaps: 344-349 and
+354-359 are unused. Every baseline on all three classes also gets an unset budget work/cost pair
+(task 1176/1177, resource 756/757, assignment 673/674, stepping by 4 for the numbered slots).</p>
+<p>Alongside every baseline Project also writes deliverable dates (1174/1175, always NA) and budget
+work/cost (1176/1177, its own "no value" double <code>8dedb5a0f7c6b0be</code>); this library writes them too, so
+its baseline entries match Project's field for field apart from the timephased pair below.</p>
+<p>Two entries per task (173, 174), two per resource (68, 69) and two per assignment (52
+<code>RAW_TIMEPHASED_BASELINE_WORK</code>, 53 <code>RAW_TIMEPHASED_BASELINE_COST</code>) hold the timephased baseline, and
+they are <strong>the only ones Clear Baseline removes</strong>: clearing leaves every scalar entry in place with
+its dates at NA and its numbers at zero. <code>Props 0x2401395</code> records when the baseline was saved, and
+goes back to NA on clear.</p>
+<p>This library does not write the timephased pair, and that is a deliberate limit rather than an
+omission: Project resaved a file of ours that had none and <strong>did not add them</strong>, while the baseline
+columns, the "last saved on" menu entry and the variance columns were all correct. They hold the
+<em>spread</em> of baseline work over time, which only the usage views show.</p>
+<p>One baseline-related assignment entry is still unidentified: id 267, eight zero bytes on every row,
+appears when a baseline is set. It is not written here, and Project's resave of a file without it did
+not add it.</p>
+<p>Because a resource baseline is two numbers and clearing zeroes them, a resource with nothing assigned
+is indistinguishable from a cleared slot. <code>read_project()</code> reports a resource baseline only when it
+is non-zero; the ambiguity is in the format, not the reader.</p>
+<h3 id="an-assignment-row-per-leaf-task">An assignment row per leaf task</h3>
+<p>Project keeps one <code>TBkndAssn</code> record for <strong>every leaf task</strong>, not just the assigned ones: where nobody
+is assigned it writes a placeholder with <code>RESOURCE_UNIQUE_ID = -65535</code> and the constant resource GUID
+<code>788bcba08c2a6d4300000000000000ff</code>, plus var 667 (16 zero bytes) alongside the usual 49/634/665. The
+placeholder carries the task's own duration as work, through the same formulas a real assignment uses
+— a milestone's zeros are just its zero duration. Summary rows get nothing.</p>
+<p>The template's copies of these records cannot be reused (Project joins them to tasks by unique id and
+they override the task's duration), which is why an early version dropped them entirely; they have to
+be regenerated per task instead.</p>
+<h3 id="files-open-on-the-templates-row-count-open">Files open on the template's row count (open)</h3>
+<p>Every file this library writes opens in Project showing only as many rows as the template had (three),
+until the view is switched, at which point all rows appear. The data is correct throughout — only the
+first paint is wrong.</p>
+<p>Ten rounds of transplant bisection against a Project resave of the same project narrowed it to
+<code>TBkndAssn</code>, and no further:</p>
+<table>
+<thead>
+<tr>
+<th>swapped in from a Project-written file</th>
+<th>result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>the whole <code>214</code> view storage (33 streams, byte-identical)</td>
+<td>still wrong</td>
+</tr>
+<tr>
+<td><code>114/Props</code>, task streams, resources, calendars, links</td>
+<td>still wrong</td>
+</tr>
+<tr>
+<td>CFB container (Project's streams rewrapped by our writer)</td>
+<td><strong>correct</strong> — the container is fine</td>
+</tr>
+<tr>
+<td><code>TBkndAssn</code>, whole class</td>
+<td><strong>correct</strong></td>
+</tr>
+<tr>
+<td><code>TBkndAssn/FixedMeta</code> alone</td>
+<td><strong>correct</strong></td>
+</tr>
+<tr>
+<td><code>TBkndAssn/VarMeta</code> + <code>Var2Data</code> alone</td>
+<td><strong>correct</strong></td>
+</tr>
+<tr>
+<td><code>FixedMeta</code> header dword 6 -&gt; 4 (every Project file has 4)</td>
+<td>still wrong</td>
+</tr>
+<tr>
+<td>per-item flag byte 14, <code>0x02</code> -&gt; <code>0x06</code></td>
+<td>still wrong</td>
+</tr>
+<tr>
+<td><code>Fixed2Meta</code> item last byte -&gt; <code>0x08</code></td>
+<td>still wrong</td>
+</tr>
+<tr>
+<td>var-count byte set to Project's values</td>
+<td>still wrong</td>
+</tr>
+<tr>
+<td>an empty var 50 added on progressed assignments</td>
+<td>still wrong</td>
+</tr>
+</tbody>
+</table>
+<p>So the whole stream fixes it while none of its individual differences does — the trigger is some
+combination inside it. For an unprogressed assignment our records are byte-identical to Project's
+apart from the CREATED timestamp, which makes the remaining differences few but evidently interacting.</p>
+<h3 id="progress-on-assigned-tasks-open">Progress on assigned tasks (open)</h3>
+<p>A task at 100% that has resource assignments does not survive a resave: Project keeps its dates but
+recalculates the progress and shows the task at 99% with a zero duration. It reconciles a task's
+actuals against its assignments' timephased data, and the assignment var entries are a pair — id 49
+is <em>remaining</em> regular work (what we write, holding the total), id 50 <em>actual</em> regular work (which
+we do not write at all).</p>
+<p>Three verification rounds narrowed it without closing it:
+* leaving 49 holding the work and writing no 50 keeps the task's start and finish and loses only
+  the percentage — the behaviour shipped today, and the reason <code>ScheduleWarning</code> flags this case;
+* emptying 49 and writing 50 in Project's own shape (<code>&lt;H count=1&gt;&lt;H 24&gt;&lt;I 36&gt;</code>, then <code>+8</code> units
+  x 10000, <code>+16</code> actual work in milli-minutes, <code>+24</code> actual duration in tenths x 8, repeated at
+  <code>+36</code>, <code>+44</code>, <code>+52</code>; 56 bytes, structurally byte-identical to <code>DR&amp;R.mpp</code>) makes Project accept
+  100% — but it rewrites the blob's count word to 0 and collapses the task onto its start, so
+  something outside the blob still tells it no work was done;
+* partial progress (50%) round-trips exactly as written, with or without assignments.
+Project writes entry 50 on every assignment, progressed or not, so its presence is not the gate.</p>
+<h2 id="not-yet-handled">Not yet handled</h2>
+<p>Resource rates and costs, material and cost resource types, per-resource working weeks (resource
+calendars are written as copies of Standard), assignment actual work / percent complete, baselines,
+timephased data, and subprojects.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
