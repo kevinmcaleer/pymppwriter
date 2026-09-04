@@ -269,6 +269,10 @@ for Baseline1 and so on, with an irregular stride (slot 6 jumps from 526 to 544)
 tabulated in `writer.py` rather than computed. Assignments carry 146/147 start/finish, 16 work, 32
 cost; resources 15 work and 17 cost.
 
+Alongside every baseline Project also writes deliverable dates (1174/1175, always NA) and budget
+work/cost (1176/1177, its own "no value" double `8dedb5a0f7c6b0be`); this library writes them too, so
+its baseline entries match Project's field for field apart from the timephased pair below.
+
 Two entries per task (173, 174) and two per assignment (52 `RAW_TIMEPHASED_BASELINE_WORK`, 53
 `RAW_TIMEPHASED_BASELINE_COST`) hold the timephased baseline, and they are **the only ones Clear
 Baseline removes**: clearing leaves every scalar entry in place with its dates at NA and its numbers

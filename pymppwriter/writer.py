@@ -75,6 +75,12 @@ ASSN_BASELINE_IDS = [
     {"start": 367, "finish": 368, "work": 361, "cost": 362},
     {"start": 376, "finish": 377, "work": 370, "cost": 371},
 ]
+# deliverable dates and budget work/cost: Project writes them alongside every
+# baseline, always unset — NA dates and its own "no value" double
+TASK_BASELINE_EXTRAS = [
+    {"deliverable_start": 1174, "deliverable_finish": 1175, "budget_work": 1176, "budget_cost": 1177},
+]
+BASELINE_UNSET_DOUBLE = bytes.fromhex("8dedb5a0f7c6b0be")
 # timephased baseline blobs, removed when a baseline is cleared
 TASK_BASELINE_TIMEPHASED = (173, 174)
 ASSN_BASELINE_TIMEPHASED = (52, 53)
@@ -460,6 +466,75 @@ def validate(project: Project) -> None:
                 stack.append((nxt, iter(succs.get(nxt, ()))))
 
 
+def effective_schedule(project: Project):
+    """(by_uid, children, deepest_first, pattern, eff) for a project.
+
+    eff maps uid -> (start, finish, duration in tenths), with summaries rolled
+    up from their children in working time, deepest first so nesting works.
+    Shared by the writer and set_baseline() so a baseline records exactly the
+    schedule the file will describe.
+    """
+    by_uid: Dict[int, Task] = {t.uid: t for t in project.tasks}
+    children: Dict[int, List[Task]] = {}
+    for t in project.tasks:
+        children.setdefault(t.parent_uid, []).append(t)
+
+    def depth(t: Task) -> int:
+        d, p, seen = 0, t.parent_uid, set()
+        while p in by_uid and p not in seen:
+            seen.add(p); d += 1; p = by_uid[p].parent_uid
+        return d
+
+    deepest_first = sorted(project.tasks, key=depth, reverse=True)
+    pattern = _work_pattern(project.calendar)
+    eff: Dict[int, tuple] = {}
+    for t in deepest_first:
+        kids = children.get(t.uid)
+        if kids:
+            s = min(eff[k.uid][0] for k in kids)
+            f = max(eff[k.uid][1] for k in kids)
+            eff[t.uid] = (s, f, working_tenths(s, f, pattern))
+        else:
+            eff[t.uid] = (t.start, t.finish, int(round(t.duration_days * TENTHS_PER_DAY)))
+    return by_uid, children, deepest_first, pattern, eff
+
+
+def set_baseline(project: Project, slot: int = 0) -> None:
+    """Save the current schedule into baseline `slot` (0 = Baseline, 1-10).
+
+    Records what Project records: start, finish, duration and work per task,
+    with summaries spanning their children and work rolled up from assignments.
+    The writer emits these as var data, and stamps the save date in Props.
+    """
+    if not 0 <= slot <= 10:
+        raise ValueError(f"baseline slot must be 0-10 (got {slot})")
+    _, children, deepest_first, _, eff = effective_schedule(project)
+    direct_work: Dict[int, float] = {}
+    for asn in project.assignments:
+        if asn.task_uid in eff:
+            direct_work[asn.task_uid] = (direct_work.get(asn.task_uid, 0.0)
+                                         + eff[asn.task_uid][2] * WORK_SCALE * asn.units)
+    wsum: Dict[int, float] = {}
+    for t in deepest_first:
+        wsum[t.uid] = direct_work.get(t.uid, 0.0) + sum(wsum[k.uid] for k in children.get(t.uid, []))
+    for t in project.tasks:
+        start, finish, tenths = eff[t.uid]
+        t.baselines[slot] = Baseline(
+            start=start, finish=finish,
+            duration_days=round(tenths / TENTHS_PER_DAY, 4),
+            work_hours=round(wsum[t.uid] / (WORK_SCALE * 600), 4),
+        )
+
+
+def clear_baseline(project: Project, slot: int = 0) -> None:
+    """Drop baseline `slot`. Project keeps the entries and blanks them; the
+    writer does the same, so a cleared slot reads back as absent."""
+    if not 0 <= slot <= 10:
+        raise ValueError(f"baseline slot must be 0-10 (got {slot})")
+    for t in project.tasks:
+        t.baselines.pop(slot, None)
+
+
 class MppWriter:
     def __init__(self, template_path: str, new_guid=None, now=None):
         """new_guid and now make output reproducible: pass a counter-backed
@@ -692,29 +767,7 @@ class MppWriter:
     # ------------------------------------------------------------- build ---
     def build(self, project: Project) -> bytes:
         validate(project)
-        by_uid: Dict[int, Task] = {t.uid: t for t in project.tasks}
-        children: Dict[int, List[Task]] = {}
-        for t in project.tasks:
-            children.setdefault(t.parent_uid, []).append(t)
-
-        # effective schedule per task: summaries roll up from children (working time),
-        # deepest summaries first so rollups nest correctly
-        def depth(t: Task) -> int:
-            d, p, seen = 0, t.parent_uid, set()
-            while p in by_uid and p not in seen:
-                seen.add(p); d += 1; p = by_uid[p].parent_uid
-            return d
-
-        pattern = _work_pattern(project.calendar)
-        eff: Dict[int, tuple] = {}    # uid -> (start, finish, dur_tenths)
-        for t in sorted(project.tasks, key=depth, reverse=True):
-            kids = children.get(t.uid)
-            if kids:
-                s = min(eff[k.uid][0] for k in kids)
-                f = max(eff[k.uid][1] for k in kids)
-                eff[t.uid] = (s, f, working_tenths(s, f, pattern))
-            else:
-                eff[t.uid] = (t.start, t.finish, int(round(t.duration_days * TENTHS_PER_DAY)))
+        by_uid, children, deepest_first, pattern, eff = effective_schedule(project)
 
         # earliest start each task's predecessors imply, so we only pin dates
         # the links do not already produce (Project's own files constrain
@@ -786,12 +839,12 @@ class MppWriter:
             dur_tenths = eff[asn.task_uid][2]
             direct_work[asn.task_uid] = direct_work.get(asn.task_uid, 0.0) + dur_tenths * WORK_SCALE * asn.units
         wsum: Dict[int, float] = {}
-        for t in sorted(project.tasks, key=depth, reverse=True):
+        for t in deepest_first:
             wsum[t.uid] = direct_work.get(t.uid, 0.0) + sum(wsum[k.uid] for k in children.get(t.uid, []))
 
         # field validation + percent-complete rollup (summaries weighted by duration)
         pct_eff: Dict[int, int] = {}
-        for t in sorted(project.tasks, key=depth, reverse=True):
+        for t in deepest_first:
             if t.constraint is not None and t.constraint not in CONSTRAINT_TYPES:
                 raise ValueError(f"task {t.uid}: unknown constraint {t.constraint!r}")
             if t.task_type not in TASK_TYPES:
@@ -877,7 +930,8 @@ class MppWriter:
         def emit(proto: dict, uid: int, tid: int, name: str, start, finish, dur_tenths: int,
                  level: int, parent_uid: int, guid: bytes, parent_guid: bytes, is_summary: bool,
                  position: int, units: str = "d", estimated: bool = False, work: float = 0.0,
-                 cal_uid: Optional[int] = None, task: Optional[Task] = None, pct: int = 0):
+                 cal_uid: Optional[int] = None, task: Optional[Task] = None, pct: int = 0,
+                 baselines: Optional[Dict[int, Baseline]] = None):
             rec = bytearray(proto["rec"]); rec2 = bytearray(proto["rec2"])
             self._put(rec, "UNIQUE_ID", "<I", uid)
             self._put(rec, "ID", "<I", tid)
@@ -985,6 +1039,24 @@ class MppWriter:
                     fbit = self.task_bit.get(FLAG_IDS[n - 1])
                     if fbit is not None:
                         B.set_meta_bit(m, m2, fbit, bool(v))
+            # baselines are var data, not fixed fields — the fixed baseline
+            # fields stay empty in files Project writes
+            for slot, b in sorted((baselines or {}).items()):
+                ids = TASK_BASELINE_IDS[slot]
+                extra_vars.append((ids["start"], B.encode_timestamp(b.start)))
+                extra_vars.append((ids["finish"], B.encode_timestamp(b.finish)))
+                extra_vars.append((ids["duration"],
+                                   struct.pack("<i", int(round(b.duration_days * TENTHS_PER_DAY)))))
+                extra_vars.append((ids["units"], struct.pack(
+                    "<H", SUMMARY_UNITS if is_summary else UNITS_CODES[units])))
+                extra_vars.append((ids["work"], struct.pack("<d", b.work_hours * 600 * WORK_SCALE)))
+                extra_vars.append((ids["cost"], struct.pack("<d", b.cost)))
+                if slot < len(TASK_BASELINE_EXTRAS):     # only slot 0's ids are established
+                    ex = TASK_BASELINE_EXTRAS[slot]
+                    extra_vars.append((ex["deliverable_start"], B.encode_timestamp(None)))
+                    extra_vars.append((ex["deliverable_finish"], B.encode_timestamp(None)))
+                    extra_vars.append((ex["budget_work"], BASELINE_UNSET_DOUBLE))
+                    extra_vars.append((ex["budget_cost"], BASELINE_UNSET_DOUBLE))
             for typ, _ in extra_vars:
                 fbit = self.task_bit.get(typ)
                 if fbit is not None:
@@ -999,9 +1071,24 @@ class MppWriter:
             for typ, payload in extra_vars:
                 var_entries.append((uid, typ, payload))
 
+        summary_baselines: Dict[int, Baseline] = {}
+        for slot in sorted({s for t in project.tasks for s in t.baselines}):
+            rows = [t.baselines[slot] for t in project.tasks if slot in t.baselines]
+            starts = [b.start for b in rows if b.start]
+            finishes = [b.finish for b in rows if b.finish]
+            if not starts or not finishes:
+                continue
+            s0, f0 = min(starts), max(finishes)
+            summary_baselines[slot] = Baseline(
+                start=s0, finish=f0,
+                duration_days=round(working_tenths(s0, f0, pattern) / TENTHS_PER_DAY, 4),
+                work_hours=sum(t.baselines[slot].work_hours for t in project.tasks
+                               if slot in t.baselines and t.parent_uid == 0),
+            )
         emit(self.proto["summary"], 0, 0, project.title, p_start, p_finish,
              working_tenths(p_start, p_finish, pattern), 0, 0, summary_guid, b"\0" * 16, True, 1,
-             work=sum(wsum[t.uid] for t in project.tasks if t.parent_uid == 0), pct=pct0)
+             work=sum(wsum[t.uid] for t in project.tasks if t.parent_uid == 0), pct=pct0,
+             baselines=summary_baselines)
         pos = 2
         # tasks in ID (display) order = list order
         for tid, t in enumerate(project.tasks, start=1):
@@ -1014,7 +1101,8 @@ class MppWriter:
                 task_cal = named_cal_uid[t.calendar]
             emit(self.proto["task"], t.uid, tid, t.name, start, finish, dur_tenths,
                  t.outline_level, t.parent_uid, t.guid, parent_guid, t.uid in children, pos,
-                 t.duration_units, t.estimated, wsum[t.uid], task_cal, t, pct_eff[t.uid])
+                 t.duration_units, t.estimated, wsum[t.uid], task_cal, t, pct_eff[t.uid],
+                 t.baselines)
             pos += 1
 
         # assemble streams: FixedMeta offset field (bytes 4..8) = record offset in FixedData
@@ -1285,6 +1373,13 @@ class MppWriter:
         if project.currency_code is not None and B.PROPS_CURRENCY_CODE in self.props:
             self.props[B.PROPS_CURRENCY_CODE] = \
                 project.currency_code.encode("utf-16-le") + b"\0\0"
+        # when the baseline was saved; NA when there is none, as Project leaves
+        # it after Clear Baseline
+        if PROPS_BASELINE_SAVED in self.props:
+            has_baseline = any(t.baselines for t in project.tasks)
+            self.props[PROPS_BASELINE_SAVED] = (
+                B.encode_timestamp(self.now()) if has_baseline else B.encode_timestamp(None))
+
         # stale 2010-era next-uid counters make Project renumber task uids;
         # M365 itself deletes the key on save
         if B.PROPS_LEGACY_NEXT_UIDS in self.props:
