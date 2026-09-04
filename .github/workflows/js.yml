@@ -8,12 +8,14 @@ defaults:
   run:
     working-directory: js
 jobs:
+  # the suite runs the .ts sources directly, which needs Node's type stripping
+  # (22.6+); the published package is compiled JavaScript and supports Node 20
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node-version: ["20.x", "22.x", "24.x"]
+        node-version: ["22.x", "24.x"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,3 +24,29 @@ jobs:
       - run: npm install
       - run: npm run typecheck
       - run: npm test
+
+  # what npm publishes has to work on the oldest Node the package claims
+  package:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["20.x", "24.x"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: npm install
+      - run: npm run build
+      - name: the built package imports and works
+        run: |
+          node --input-type=module -e "
+            import { Storage, writeCfb, readCfb, encodeUnicode, decodeUnicode } from './dist/index.js';
+            const root = new Storage();
+            root.set('dir/hello', encodeUnicode('round trip'));
+            const back = readCfb(writeCfb(root));
+            const got = decodeUnicode(back.get('dir/hello'));
+            if (got !== 'round trip') throw new Error('dist round trip failed: ' + got);
+            console.log('dist works on Node ' + process.versions.node);
+          "
