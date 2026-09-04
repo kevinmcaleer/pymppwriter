@@ -660,3 +660,56 @@ def test_writer_warns_when_a_finished_task_has_assignments(tmp_path):
                 resources=[Resource(1, "Kevin")], assignments=[Assignment(1, 1)])
     with pytest.warns(ScheduleWarning, match="99%"):
         MppWriter("templates/template.mpp").write(p, str(tmp_path / "o.mpp"))
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_read_project_round_trips_the_model(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import (MppWriter, Project, Task, Relation, Resource, Assignment,
+                             read_project)
+    written = Project(
+        "Round trip", D(2026, 9, 7, 8),
+        [Task(1, "Phase", D(2026, 9, 7, 8), D(2026, 9, 11, 17), outline_level=1),
+         Task(2, "Design", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2,
+              outline_level=2, parent_uid=1, notes="Pencil first,\nCAD later {ok}",
+              wbs="1.1", percent_complete=50, priority=800),
+         Task(3, "Build", D(2026, 9, 9, 8), D(2026, 9, 11, 17), duration_days=3,
+              outline_level=2, parent_uid=1, estimated=True),
+         Task(4, "Ship", D(2026, 9, 14, 8), D(2026, 9, 14, 8), duration_days=0,
+              outline_level=1, manual=True)],
+        [Relation(2, 3), Relation(3, 4, type="SS", lag_days=1.0)],
+        resources=[Resource(1, "Kevin McAleer", initials="KM", email="k@example.com"),
+                   Resource(2, "Robot", max_units=2.0)],
+        assignments=[Assignment(2, 1), Assignment(3, 2, units=0.5)])
+    out = tmp_path / "rt.mpp"
+    MppWriter("templates/template.mpp").write(written, str(out))
+
+    read = read_project(str(out))
+    assert read.title == "Round trip" and read.start == D(2026, 9, 7, 8)
+    by_uid = {t.uid: t for t in read.tasks}
+    assert set(by_uid) == {1, 2, 3, 4}
+    design = by_uid[2]
+    assert (design.name, design.start, design.finish) == ("Design", D(2026, 9, 7, 8), D(2026, 9, 8, 17))
+    assert design.duration_days == 2.0 and design.outline_level == 2 and design.parent_uid == 1
+    assert design.percent_complete == 50 and design.priority == 800 and design.wbs == "1.1"
+    assert design.notes == "Pencil first,\nCAD later {ok}"      # through the RTF envelope
+    assert by_uid[3].estimated and by_uid[3].duration_days == 3.0
+    assert by_uid[4].manual and by_uid[4].duration_days == 0.0
+    assert by_uid[1].outline_level == 1                          # summary row kept
+    assert sorted((r.pred_uid, r.succ_uid, r.type, r.lag_days) for r in read.relations) == [
+        (2, 3, "FS", 0.0), (3, 4, "SS", 1.0)]
+    assert [(r.uid, r.name, r.initials, r.max_units) for r in read.resources] == [
+        (1, "Kevin McAleer", "KM", 1.0), (2, "Robot", "", 2.0)]
+    assert sorted((a.task_uid, a.resource_uid, a.units) for a in read.assignments) == [
+        (2, 1, 1.0), (3, 2, 0.5)]
+
+
+def test_read_project_rejects_a_non_project_file(tmp_path):
+    from pymppwriter import MppReadError, read_project
+    from pymppwriter.cfb import Storage, write_cfb
+    root = Storage()
+    root.set_path("something", b"not a project")
+    plain = tmp_path / "plain.cfb"
+    plain.write_bytes(write_cfb(root))
+    with pytest.raises(MppReadError, match="not an MPP14"):
+        read_project(str(plain))

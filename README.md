@@ -165,6 +165,25 @@ Declared starts that Project's scheduler would not produce on its own are held i
 Start-No-Earlier-Than constraint, exactly as Project does for a typed-in date; tasks their
 predecessors already place are left as-soon-as-possible so plans stay link-driven.
 
+### Reading a plan back
+
+```python
+from pymppwriter import read_project
+
+project = read_project("plan.mpp")          # any MPP14 file, 2010 through M365
+for task in project.tasks:
+    print(task.uid, task.name, task.duration_days, task.percent_complete)
+```
+
+`read_project()` returns the same `Project` the writer takes, so a file can be
+read, edited and written again. Every offset comes from the file's own `Props`
+field maps and every flag from its meta bitmaps — there are no hard-coded record
+layouts — so it reads files saved by any Project version of that era, not just
+ones this library wrote. Tasks (names, dates, durations, outline, notes, WBS,
+constraints, progress, manual scheduling), dependencies with types and lags,
+resources and assignments come back; baselines, costs and timephased data do
+not. A file that is not an MPP14 project raises `MppReadError`.
+
 ## Verifying output without Project
 
 If you have Java installed, `scripts/mpxj_oracle.py` reads any `.mpp` back through
