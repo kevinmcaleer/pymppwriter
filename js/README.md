@@ -8,9 +8,10 @@ A port of [pymppwriter](https://github.com/kevinmcaleer/pymppwriter), sharing it
 its test fixtures. Both implementations are checked against each other byte for byte, so a fix in
 one cannot silently diverge from the other.
 
-> **Status: the writer works.** Container, record layer and writer are done, and produce files
-> **byte-identical** to the Python implementation given the same input. The reader is next; see
-> [epic #54](https://github.com/kevinmcaleer/pymppwriter/issues/54).
+> **Status: reading and writing both work.** Container, record layer, writer and reader are done.
+> The writer produces files **byte-identical** to the Python implementation given the same input,
+> and both readers return the same model from the same file — asserted on every test run. Publishing
+> to npm is next; see [epic #54](https://github.com/kevinmcaleer/pymppwriter/issues/54).
 
 ## Install
 
@@ -43,6 +44,22 @@ with no zone, so `Date.UTC(2027, 2, 1, 8)` means 08:00 in the plan.
 Pass `newGuid` and `now` to make output reproducible, and `onWarning` to catch the schedules
 Microsoft Project accepts but silently changes (a start earlier than its links allow, a start in
 non-working time, a task calendar sharing no working time with its resources').
+
+## Reading a plan back
+
+```ts
+import { readProject } from "mppwriter";
+
+const project = readProject(bytes);          // any MPP14 file, 2010 through M365
+for (const task of project.tasks) {
+  console.log(task.uid, task.name, task.durationDays, task.percentComplete);
+}
+```
+
+`readProject()` returns the same shape `build()` takes, so a file can be read, edited and written
+again. Every offset comes from the file's own field maps, so it reads what any Project of that era
+wrote, not just what this library produced. Baselines, costs and timephased data are not returned —
+the writer does not model them either. A file that is not an MPP14 project throws `MppReadError`.
 
 ## The container
 

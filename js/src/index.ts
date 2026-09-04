@@ -15,3 +15,5 @@ export * from "./blocks.ts";
 
 export * from "./model.ts";
 export { MppWriter, writeProject, type WriterOptions } from "./writer.ts";
+
+export { readProject, MppReadError } from "./reader.ts";
