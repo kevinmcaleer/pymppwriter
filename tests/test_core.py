@@ -1,7 +1,7 @@
 import os, struct
 import olefile
 import pytest
-from pymppwriter.cfb import Storage, write_cfb, _name_key
+from pymppwriter.cfb import Storage, write_cfb, load_cfb, _name_key
 from pymppwriter import blocks as B
 
 
@@ -783,3 +783,66 @@ def test_writer_is_reproducible_with_injected_guids_and_clock(tmp_path):
         return path.read_bytes()
 
     assert write(tmp_path / "a.mpp") == write(tmp_path / "b.mpp")
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_read_project_returns_baselines(tmp_path):
+    """Baselines live in var data, so this injects the entries Project writes
+    and reads them back — the shapes come from a Project-set reference (#59)."""
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task, read_project
+    from pymppwriter.writer import TASK_BASELINE_IDS, TENTHS_PER_DAY, WORK_SCALE
+
+    out = tmp_path / "b.mpp"
+    MppWriter("templates/template.mpp").write(
+        Project("Baselines", D(2027, 4, 5, 8),
+                [Task(1, "Design", D(2027, 4, 5, 8), D(2027, 4, 6, 17), duration_days=2),
+                 Task(2, "Build", D(2027, 4, 7, 8), D(2027, 4, 9, 17), duration_days=3)]),
+        str(out))
+
+    # add slot 0 to task 1 and a cleared slot 1 (NA dates, zeroes) as Project leaves them
+    ole = olefile.OleFileIO(str(out))
+    r = lambda s: ole.openstream("   114/TBkndTask/" + s).read()
+    hdr, table, entries = B.parse_var_meta(r("VarMeta"))
+    vdata = r("Var2Data")
+    values = [(uid, typ, B.read_var(vdata, off)) for uid, off, typ, _ in entries]
+    slot0, slot1 = TASK_BASELINE_IDS[0], TASK_BASELINE_IDS[1]
+    values += [
+        (1, slot0["start"], B.encode_timestamp(D(2027, 4, 5, 8))),
+        (1, slot0["finish"], B.encode_timestamp(D(2027, 4, 6, 17))),
+        (1, slot0["duration"], struct.pack("<i", 2 * TENTHS_PER_DAY)),
+        (1, slot0["work"], struct.pack("<d", 16 * 600 * WORK_SCALE)),
+        (1, slot0["cost"], struct.pack("<d", 0.0)),
+        (1, slot1["start"], B.encode_timestamp(None)),          # a cleared slot
+        (1, slot1["finish"], B.encode_timestamp(None)),
+        (1, slot1["duration"], struct.pack("<i", 0)),
+        (1, slot1["work"], struct.pack("<d", 0.0)),
+    ]
+    meta, data = B.build_var_blocks(hdr, values)
+    root = load_cfb(str(out))
+    root.set_path("   114/TBkndTask/VarMeta", meta)
+    root.set_path("   114/TBkndTask/Var2Data", data)
+    patched = tmp_path / "patched.mpp"
+    patched.write_bytes(write_cfb(root))
+
+    tasks = {t.uid: t for t in read_project(str(patched)).tasks}
+    assert list(tasks[1].baselines) == [0], "the cleared slot should not count as saved"
+    b = tasks[1].baselines[0]
+    assert (b.start, b.finish) == (D(2027, 4, 5, 8), D(2027, 4, 6, 17))
+    assert b.duration_days == 2.0 and b.work_hours == 16.0 and b.cost == 0.0
+    assert tasks[2].baselines == {}, "a task without a baseline has none"
+
+
+@pytest.mark.skipif(not os.environ.get("PYMPP_BASELINE_REFERENCE"),
+                    reason="set PYMPP_BASELINE_REFERENCE to a Project-set baseline file")
+def test_read_baselines_from_a_project_written_file():
+    """Reads the real thing: PYMPP_BASELINE_REFERENCE=~/Downloads/baseline-2-numbered.mpp"""
+    from pymppwriter import read_project
+    project = read_project(os.environ["PYMPP_BASELINE_REFERENCE"])
+    with_baselines = [t for t in project.tasks if t.baselines]
+    assert with_baselines, "the reference file should carry baselines"
+    for t in with_baselines:
+        for slot, b in t.baselines.items():
+            assert 0 <= slot <= 10
+            assert b.start is not None and b.finish is not None
+            assert b.finish >= b.start

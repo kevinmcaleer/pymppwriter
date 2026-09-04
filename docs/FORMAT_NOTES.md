@@ -256,6 +256,24 @@ calendar flag bits and the relation trailer; 2010-era and current M365 templates
 tested, and 2013-2021 files share the same MPP14 structures between those two points. Point the
 suite at any other vintage with `PYMPP_TEMPLATES=/path/a.mpp:/path/b.mpp pytest`.
 
+### Baselines live in var data
+Setting a baseline in Project writes **variable-data entries**, not the fixed record fields — the 176
+baseline entries in the task field map are almost all var, and the fixed ones stay empty in files
+Project writes (only `BASELINE_FIXED_COST_ACCRUAL` carries a value, and it is a default present
+before any baseline).
+
+Per task, slot 0 (the unnumbered Baseline) is ids 43 start, 44 finish, 27 duration in tenths, 179
+duration units, 1 work in milli-minutes, 6 cost, plus deliverable dates (1174/1175) and budget
+work/cost (1176/1177) that Project leaves at NA. Slots 1-10 mirror those at their own ids — 482-492
+for Baseline1 and so on, with an irregular stride (slot 6 jumps from 526 to 544), so the ids are
+tabulated in `writer.py` rather than computed. Assignments carry 146/147 start/finish, 16 work, 32
+cost; resources 15 work and 17 cost.
+
+Two entries per task (173, 174) and two per assignment (52 `RAW_TIMEPHASED_BASELINE_WORK`, 53
+`RAW_TIMEPHASED_BASELINE_COST`) hold the timephased baseline, and they are **the only ones Clear
+Baseline removes**: clearing leaves every scalar entry in place with its dates at NA and its numbers
+at zero. `Props 0x2401395` records when the baseline was saved, and goes back to NA on clear.
+
 ### An assignment row per leaf task
 Project keeps one `TBkndAssn` record for **every leaf task**, not just the assigned ones: where nobody
 is assigned it writes a placeholder with `RESOURCE_UNIQUE_ID = -65535` and the constant resource GUID
