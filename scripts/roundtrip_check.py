@@ -4,8 +4,9 @@ the same schedule as the file we generated?
     python scripts/roundtrip_check.py generated.mpp resaved-by-project.mpp
 
 Reads both through MPXJ and compares tasks (uid, name, start, finish,
-duration, constraint), links (predecessor, successor, type, lag), resources
-(uid, name, max units), and assignments (task, resource, units).
+duration, constraint), their baselines (all eleven slots), links
+(predecessor, successor, type, lag), resources (uid, name, max units), and
+assignments (task, resource, units).
 Tasks/resources that exist only in the resaved file are reported but allowed
 (the user may have added rows in Project before saving); anything missing or
 changed fails. Requires Java + `pip install mpxj jpype1`.
@@ -23,12 +24,26 @@ from org.mpxj.reader import UniversalProjectReader  # noqa: E402
 def snapshot(path):
     pf = UniversalProjectReader().read(path)
     tasks = {}
+    baselines = {}
     links = set()
     for t in pf.getTasks():
         uid = t.getUniqueID().intValue()
         tasks[uid] = (str(t.getName()), str(t.getStart()), str(t.getFinish()),
                       str(t.getDuration()), str(t.getConstraintType()),
                       str(t.getConstraintDate()))
+        # baselines: slot 0 is the unnumbered one, 1-10 the numbered slots.
+        # A saved baseline that a resave drops is exactly the kind of silent
+        # loss this check exists to catch.
+        for slot in range(11):
+            if slot == 0:
+                start, finish, dur = t.getBaselineStart(), t.getBaselineFinish(), t.getBaselineDuration()
+            else:
+                start = t.getBaselineStart(slot)
+                finish = t.getBaselineFinish(slot)
+                dur = t.getBaselineDuration(slot)
+            if start is None and finish is None:
+                continue
+            baselines[(uid, slot)] = (str(start), str(finish), str(dur))
         for r in t.getPredecessors():
             links.add((r.getPredecessorTask().getUniqueID().intValue(), uid,
                        str(r.getType()), str(r.getLag())))
@@ -40,13 +55,13 @@ def snapshot(path):
         if a.getResourceUniqueID() is not None and a.getResourceUniqueID().intValue() > 0:
             assignments.add((a.getTaskUniqueID().intValue(),
                              a.getResourceUniqueID().intValue(), str(a.getUnits())))
-    return tasks, links, resources, assignments
+    return tasks, baselines, links, resources, assignments
 
 
 def main():
     a, b = sys.argv[1], sys.argv[2]
-    ta, la, ra, aa = snapshot(a)
-    tb, lb, rb, ab = snapshot(b)
+    ta, bla, la, ra, aa = snapshot(a)
+    tb, blb, lb, rb, ab = snapshot(b)
     failures = []
     for uid, row in ta.items():
         if uid not in tb:
@@ -55,6 +70,13 @@ def main():
             failures.append(f"task uid {uid} changed: {row} -> {tb[uid]}")
     for uid in tb.keys() - ta.keys():
         print(f"note: task uid {uid} {tb[uid][0]!r} added in Project (allowed)")
+    for key, row in bla.items():
+        uid, slot = key
+        name = "Baseline" if slot == 0 else f"Baseline{slot}"
+        if key not in blb:
+            failures.append(f"{name} on task {uid} missing from resave")
+        elif blb[key] != row:
+            failures.append(f"{name} on task {uid} changed: {row} -> {blb[key]}")
     for key in la - lb:
         pred, succ, kind, lag = key
         near = [k for k in lb if k[:2] == (pred, succ)]
@@ -74,8 +96,8 @@ def main():
         for f in failures:
             print("  " + f)
         sys.exit(1)
-    print(f"round-trip OK: {len(ta)} tasks, {len(la)} links, {len(ra)} resources, "
-          f"{len(aa)} assignments preserved")
+    print(f"round-trip OK: {len(ta)} tasks, {len(bla)} baselines, {len(la)} links, "
+          f"{len(ra)} resources, {len(aa)} assignments preserved")
 
 
 if __name__ == "__main__":
