@@ -71,7 +71,7 @@ PyPI rejects the token.
 2. Commit, then tag and push:
 
    ```bash
-   git tag v0.3.0 && git push origin v0.3.0
+   git tag v0.4.0 && git push origin v0.4.0
    ```
 
 3. Publish a GitHub Release for that tag. The workflow runs the tests, builds
