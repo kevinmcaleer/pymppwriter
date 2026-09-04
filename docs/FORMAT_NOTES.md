@@ -238,16 +238,9 @@ Project M365):
   moment before it in native 1255; 2010-era files map only 387, holding that earlier moment.
   Summary rows carry neither. Cloning the template's values instead put the day the template was
   saved on every row.
-* **a finished assignment needs the actual-work contour.** Project reconciles a task's progress
-  against its assignments' timephased data, and a 100%-complete task came back from a resave at
-  99% with its duration zeroed and its actual finish cleared. The assignment var entries are a
-  pair: id 49 is *remaining* regular work, id 50 *actual* regular work. We wrote total work into
-  49 and never wrote 50, so Project saw nothing done. On a finished assignment Project empties 49
-  and writes 50 as `<H count=1><H 24><I 36>`, then `+8` units x 10000, `+16` actual work in
-  milli-minutes, `+24` actual duration in tenths x 8, and repeats those three at `+36`, `+44` and
-  `+52` (56 bytes). Partial progress keeps its work in 49 and round-trips already; its 50 blob
-  carries extra segments and is not written yet. The assignment's `STOP`/`RESUME` (ids 264/24)
-  follow the point work has reached, as Project's own files do.
+* **an assignment's stop/resume follow the work.** Project's own files put `STOP`/`RESUME` (ids
+  264/24) at the point work has reached — the finish on a completed assignment — where we left
+  both at the task's start.
 `scripts/roundtrip_check.py` compares a generated file against a Project-resaved copy through MPXJ
 (tasks, resources, assignments; rows added in Project are allowed) — both findings above came out of
 its first run. The Gantt scroll position is a timestamp inside `214/CV_iew/Var2Data` equal to the
@@ -262,6 +255,24 @@ reading every layout from the file's own field maps, and era-detecting the calen
 calendar flag bits and the relation trailer; 2010-era and current M365 templates are round-trip
 tested, and 2013-2021 files share the same MPP14 structures between those two points. Point the
 suite at any other vintage with `PYMPP_TEMPLATES=/path/a.mpp:/path/b.mpp pytest`.
+
+### Progress on assigned tasks (open)
+A task at 100% that has resource assignments does not survive a resave: Project keeps its dates but
+recalculates the progress and shows the task at 99% with a zero duration. It reconciles a task's
+actuals against its assignments' timephased data, and the assignment var entries are a pair — id 49
+is *remaining* regular work (what we write, holding the total), id 50 *actual* regular work (which
+we do not write at all).
+
+Three verification rounds narrowed it without closing it:
+* leaving 49 holding the work and writing no 50 keeps the task's start and finish and loses only
+  the percentage — the behaviour shipped today, and the reason `ScheduleWarning` flags this case;
+* emptying 49 and writing 50 in Project's own shape (`<H count=1><H 24><I 36>`, then `+8` units
+  x 10000, `+16` actual work in milli-minutes, `+24` actual duration in tenths x 8, repeated at
+  `+36`, `+44`, `+52`; 56 bytes, structurally byte-identical to `DR&R.mpp`) makes Project accept
+  100% — but it rewrites the blob's count word to 0 and collapses the task onto its start, so
+  something outside the blob still tells it no work was done;
+* partial progress (50%) round-trips exactly as written, with or without assignments.
+Project writes entry 50 on every assignment, progressed or not, so its presence is not the gate.
 
 ## Not yet handled
 Resource rates and costs, material and cost resource types, per-resource working weeks (resource

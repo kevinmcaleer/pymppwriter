@@ -656,6 +656,16 @@ class MppWriter:
                               f"no working time with the resource calendars; Project will schedule "
                               f"it ignoring the resource calendar", ScheduleWarning, stacklevel=2)
 
+        # Project reconciles a finished task against its assignments' timephased
+        # actual work (var id 50), which we do not write: it accepts the dates
+        # but recalculates the progress, showing the task at 99%
+        for uid in {a.task_uid for a in project.assignments}:
+            if by_uid[uid].percent_complete == 100:
+                warnings.warn(f"task {uid} {by_uid[uid].name!r} is 100% complete and has "
+                              f"assignments; Project recalculates progress from timephased actual "
+                              f"work, which is not written yet, and will show it at 99%",
+                              ScheduleWarning, stacklevel=2)
+
         # a start on a window boundary (12:00, or the end of a half day) is not
         # a working moment: Project rolls it forward on the next recalculation
         for t in project.tasks:
@@ -1110,29 +1120,11 @@ class MppWriter:
                     # writing work*0.08 here made a 50% assignment display half its
                     # real duration (the two only coincide at 100% units)
                     b2 = bytearray(payload)
-                    # the blob holds what is *left* to do: on a finished
-                    # assignment Project empties it and moves the work into the
-                    # actual-work contour below
-                    struct.pack_into("<d", b2, 8, 0.0 if tpct == 100 else asn.units * PCT_SCALE * 16)
-                    struct.pack_into("<d", b2, 16, 0.0 if tpct == 100 else work)
-                    struct.pack_into("<I", b2, 24, 0 if tpct == 100 else dur_tenths * 8)
+                    struct.pack_into("<d", b2, 8, asn.units * PCT_SCALE * 16)
+                    struct.pack_into("<d", b2, 16, work)
+                    struct.pack_into("<I", b2, 24, dur_tenths * 8)
                     payload = bytes(b2)
                 avar_entries.append((i, typ, payload))
-            if tpct == 100:
-                # timephased actual work, the shape Project writes for a finished
-                # assignment: without it the task's actuals are rolled back on
-                # open (100% complete came back as 99% with a zero duration)
-                blob = bytearray(56)
-                struct.pack_into("<HHI", blob, 0, 1, 24, 36)
-                for off in (8, 44):
-                    struct.pack_into("<d", blob, off, asn.units * PCT_SCALE)
-                for off in (16, 36):
-                    struct.pack_into("<d", blob, off, work)
-                for off in (24, 52):
-                    struct.pack_into("<I", blob, off, dur_tenths * 8)
-                avar_entries.append((i, ASSN_NATIVE["ACTUAL_WORK_DATA"], bytes(blob)))
-                m[2] += 1                  # meta byte 2 counts the record's var entries
-                self._bitf(self.assn_bit, ASSN_NATIVE, m, m2, "ACTUAL_WORK_DATA", True)
         a = f"{PRJ}/TBkndAssn"
         afd, afm = assemble(afixed, ameta)
         afd2, afm2 = assemble(afixed2, ameta2)
