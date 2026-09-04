@@ -8,12 +8,13 @@ Microsoft 365 desktop client). Files it writes open in Project by double-click �
 whole point: an `.mpp` download is associated with Project on every corporate PC, whereas the
 MSPDI `.xml` export has to be opened manually from inside Project.
 
-> **Status: alpha.** Task names, hierarchy, dates, durations (values, display units, estimated
-> flags, milestones and summary rollups), dependencies and the project start date are verified
-> to open correctly in Project M365. Resources (name, initials, email, max units, per-resource
-> calendars) and assignments (units, work, GUID cross-references) are written and verified via
-> MPXJ. Rates/costs, calendar edits, notes and custom fields are not yet written. Treat this
-> as a working proof-of-concept, not a product.
+> **Status: alpha.** Verified to open correctly in Project M365: task names, hierarchy, dates,
+> durations (values, display units, estimated flags, milestones and summary rollups),
+> dependencies, resources and assignments, calendars (working weeks, holidays, extra base
+> calendars, per-task calendars), the wider task fields (notes, WBS, constraints, deadlines,
+> progress, priority, type, custom text/number/date/flag fields, manual scheduling) and project
+> properties (document metadata, status date, currency). Resource rates and costs, baselines and
+> timephased data are not yet written. Treat this as a working proof-of-concept, not a product.
 
 ## How it works
 
@@ -150,6 +151,20 @@ In JSON specs, resources and assignments look like:
 
 Tasks are written in list order, which becomes the ID / row order in Project.
 
+### Validation
+
+`MppWriter.write()` validates the plan first and refuses to write a file Project would reject or
+silently repair: duplicate or non-positive task uids, parent references that contradict the outline
+levels, finishes before starts, links to unknown tasks, self-links and dependency cycles all raise
+`ValueError`. Two softer disagreements come back as `ScheduleWarning`s, because Project accepts the
+file but changes it: a task whose declared start is *earlier* than its predecessors allow (Project
+moves it on the next recalculation), and a task calendar that shares no working time with its
+assigned resources' calendars (Project opens with "Not enough common working time").
+
+Declared starts that Project's scheduler would not produce on its own are held in place with a
+Start-No-Earlier-Than constraint, exactly as Project does for a typed-in date; tasks their
+predecessors already place are left as-soon-as-possible so plans stay link-driven.
+
 ## Verifying output without Project
 
 If you have Java installed, `scripts/mpxj_oracle.py` reads any `.mpp` back through
@@ -172,11 +187,12 @@ The end-to-end test is skipped unless `templates/template.mpp` exists.
 Tracked in the [GitHub Project](../../projects). Headline epics:
 
 1. ~~**Durations honoured by Project**~~ — done (verified in Project M365)
-2. **Resources & assignments** — the template's phantom assignment records are now cleared; writing real ones is next
-3. **Calendars** — project calendar and per-task calendar
-4. **Notes, custom fields, WBS, constraints, deadlines**
-5. **Round-trip fidelity** — `Save` from Project after opening produces an identical schedule
-6. **NoodlePlanner integration** — markdown → `.mpp` export
+2. ~~**Resources & assignments**~~ — done (verified in Project M365)
+3. ~~**Calendars**~~ — project calendar, extra base calendars, per-task calendars — done
+4. ~~**Notes, custom fields, WBS, constraints, deadlines**~~ — done
+5. ~~**Project properties**~~ — document metadata, status date, currency — done
+6. ~~**Round-trip fidelity**~~ — `Save` from Project after opening produces the same schedule
+7. **NoodlePlanner integration** — markdown → `.mpp` export
 
 ## Provenance & licensing
 

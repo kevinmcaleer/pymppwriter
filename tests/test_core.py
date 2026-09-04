@@ -20,6 +20,40 @@ def test_cfb_roundtrip_small_and_large_streams(tmp_path):
     assert ole.get_type("dir/emptydir") == olefile.STGTY_STORAGE
 
 
+def test_cfb_difat_large_file(tmp_path):
+    # ~9 MB payload forces > 109 FAT sectors, engaging DIFAT sector chains
+    big = (b"0123456789abcdef" * 64) * 9000       # 9,216,000 bytes
+    root = Storage()
+    root.set_path("big", big)
+    root.set_path("dir/small", b"mini stream data")
+    out = tmp_path / "big.cfb"
+    out.write_bytes(write_cfb(root))
+    ole = olefile.OleFileIO(str(out))
+    assert ole.openstream("big").read() == big
+    assert ole.openstream("dir/small").read() == b"mini stream data"
+
+
+def test_validator_rejects_bad_structures():
+    from datetime import datetime as D
+    from pymppwriter.writer import validate, Project, Task, Relation
+    ok = lambda **kw: Task(kw.pop("uid"), "t", D(2026, 1, 5, 8), D(2026, 1, 5, 17), **kw)
+    validate(Project("p", D(2026, 1, 5), [ok(uid=1), ok(uid=2, outline_level=2, parent_uid=1)],
+                     [Relation(1, 2)]))
+    with pytest.raises(ValueError, match="duplicate"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1), ok(uid=1)]))
+    with pytest.raises(ValueError, match="does not follow"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1), ok(uid=2, outline_level=3, parent_uid=1)]))
+    with pytest.raises(ValueError, match="does not match the"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1), ok(uid=2), ok(uid=3, outline_level=2, parent_uid=1)]))
+    with pytest.raises(ValueError, match="unknown task"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1)], [Relation(1, 9)]))
+    with pytest.raises(ValueError, match="itself"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1)], [Relation(1, 1)]))
+    with pytest.raises(ValueError, match="cycle"):
+        validate(Project("p", D(2026, 1, 5), [ok(uid=1), ok(uid=2), ok(uid=3)],
+                         [Relation(1, 2), Relation(2, 3), Relation(3, 1)]))
+
+
 def test_cfb_name_ordering_uses_length_then_upper():
     assert _name_key("b") < _name_key("AA")
     assert _name_key("abc") == _name_key("ABC")
@@ -179,6 +213,20 @@ def test_writer_task_fields(tmp_path):
     assert B.decode_timestamp(B.read_var(vd, vt[1][DATE_IDS[0]]), 0) == D(2026, 12, 25, 8)
     assert bit(1, FLAG_IDS[2]) == 1 and bit(2, FLAG_IDS[2]) == 0
     assert NATIVE["NOTES"] not in vt[2]
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_retargets_view_scroll(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task
+    w = MppWriter("templates/template.mpp")
+    old = w.template_start
+    p = Project("t", D(2027, 2, 1, 8), [Task(1, "A", D(2027, 2, 1, 8), D(2027, 2, 1, 17))])
+    out = tmp_path / "o.mpp"
+    MppWriter("templates/template.mpp").write(p, str(out))
+    vd = olefile.OleFileIO(str(out)).openstream("   214/CV_iew/Var2Data").read()
+    assert B.encode_timestamp(D(2027, 2, 1, 8)) in vd
+    assert old not in vd
 
 
 @pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
@@ -424,3 +472,123 @@ def test_writer_calendars(tmp_path):
     # default calendar name preserved as Standard
     _, props, _ = B.parse_props(r("Props"))
     assert props[B.PROPS_DEFAULT_CALENDAR_NAME].startswith("Standard".encode("utf-16-le"))
+
+
+def test_link_driven_start_rules():
+    from datetime import datetime as D
+    from pymppwriter.writer import link_driven_start, Relation, _work_pattern
+    pat = _work_pattern(None)
+    pred = (D(2026, 9, 7, 8), D(2026, 9, 8, 17), 9600)       # Mon 08:00 -> Tue 17:00
+    assert link_driven_start(Relation(1, 2), pred, 4800, pat) == D(2026, 9, 9, 8)
+    assert link_driven_start(Relation(1, 2), pred, 0, pat) == D(2026, 9, 8, 17)   # milestone
+    assert link_driven_start(Relation(1, 2, lag_days=1.0), pred, 4800, pat) == D(2026, 9, 9, 17)
+    assert link_driven_start(Relation(1, 2, type="SS"), pred, 4800, pat) == D(2026, 9, 7, 8)
+    assert link_driven_start(Relation(1, 2, type="FF"), pred, 4800, pat) is None
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_pins_only_starts_the_links_do_not_produce(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task, Relation
+    from pymppwriter.writer import NATIVE, CONSTRAINT_TYPES
+    p = Project("t", D(2026, 9, 7, 8),
+                [Task(1, "A", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2),
+                 Task(2, "B", D(2026, 9, 9, 8), D(2026, 9, 9, 17)),     # where the link puts it
+                 Task(3, "C", D(2026, 9, 11, 8), D(2026, 9, 11, 17))],  # a typed-in later date
+                [Relation(1, 2)])
+    w = MppWriter("templates/template.mpp")
+    out = tmp_path / "o.mpp"
+    w.write(p, str(out))
+    ole = olefile.OleFileIO(str(out))
+    r = lambda s: ole.openstream("   114/TBkndTask/" + s).read()
+    mitems = B.parse_fixed_meta_auto(r("FixedMeta"), 47)[2]
+    recs = B.split_fixed_data(r("FixedData"), mitems)
+    ct = w.task_fm[NATIVE["CONSTRAINT_TYPE"]]
+    con = {struct.unpack_from("<I", rec, 0)[0]: struct.unpack_from("<H", rec, ct.offset)[0]
+           for rec in recs if len(rec) > 100}
+    assert con[1] == CONSTRAINT_TYPES["ASAP"]       # starts with the project
+    assert con[2] == CONSTRAINT_TYPES["ASAP"]       # its predecessor places it
+    assert con[3] == CONSTRAINT_TYPES["SNET"]       # nothing else would hold this date
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_warns_when_links_contradict_declared_start(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task, Relation
+    from pymppwriter.writer import ScheduleWarning
+    p = Project("t", D(2026, 9, 7, 8),
+                [Task(1, "A", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2),
+                 Task(2, "B", D(2026, 9, 7, 8), D(2026, 9, 7, 17))],   # before its predecessor ends
+                [Relation(1, 2)])
+    with pytest.warns(ScheduleWarning, match="Project will move it"):
+        MppWriter("templates/template.mpp").write(p, str(tmp_path / "o.mpp"))
+
+
+# PYMPP_TEMPLATES=/path/a.mpp:/path/b.mpp exercises the writer against templates
+# saved by other Project versions (2013/2016/2019/2021/M365); the record sizes
+# and layouts come from each file's own headers and field maps.
+@pytest.mark.skipif(not os.environ.get("PYMPP_TEMPLATES"), reason="set PYMPP_TEMPLATES to run")
+@pytest.mark.parametrize("tmpl", os.environ.get("PYMPP_TEMPLATES", "").split(":"))
+def test_writer_accepts_other_version_templates(tmp_path, tmpl):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task, Relation
+    from pymppwriter.writer import NATIVE
+    p = Project("t", D(2026, 9, 7, 8),
+                [Task(1, "A", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2, outline_level=1),
+                 Task(2, "B", D(2026, 9, 9, 8), D(2026, 9, 9, 17), outline_level=2, parent_uid=1)],
+                [Relation(1, 2)])
+    w = MppWriter(tmpl)
+    out = tmp_path / (os.path.basename(tmpl) + ".out.mpp")
+    w.write(p, str(out))
+    ole = olefile.OleFileIO(str(out))
+    r = lambda s: ole.openstream("   114/TBkndTask/" + s).read()
+    mitems = B.parse_fixed_meta_auto(r("FixedMeta"), 47)[2]
+    recs = B.split_fixed_data(r("FixedData"), mitems)
+    dur = w.task_fm[NATIVE["DURATION"]]
+    rows = {struct.unpack_from("<I", rec, 0)[0]: rec for rec in recs if len(rec) > 100}
+    assert set(rows) >= {0, 1, 2}
+    assert struct.unpack_from("<i", rows[2], dur.offset)[0] == 4800     # 1 day, this file's layout
+    assert struct.unpack_from("<I", r("FixedMeta"), 12)[0] == len(r("FixedData"))
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_warns_on_task_calendar_without_common_working_time(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import (MppWriter, Project, Task, Resource, Assignment, Calendar)
+    from pymppwriter.writer import ScheduleWarning, weekly_overlap_minutes, _work_pattern
+    nights = Calendar("Nights", week={0: [(1080, 1320)], 1: [(1080, 1320)], 2: [(1080, 1320)],
+                                      3: [(1080, 1320)], 4: None, 5: None, 6: None})
+    assert weekly_overlap_minutes(_work_pattern(nights), _work_pattern(None)) == 0
+    p = Project("t", D(2026, 9, 7, 8),
+                [Task(1, "A", D(2026, 9, 7, 18), D(2026, 9, 7, 22), duration_days=0.5,
+                      calendar="Nights")],
+                resources=[Resource(1, "Kevin")], assignments=[Assignment(1, 1)],
+                calendars=[nights])
+    with pytest.warns(ScheduleWarning, match="shares no working time"):
+        MppWriter("templates/template.mpp").write(p, str(tmp_path / "o.mpp"))
+
+
+def test_validator_handles_chains_deeper_than_the_recursion_limit():
+    from datetime import datetime as D
+    from pymppwriter.writer import validate, Project, Task, Relation
+    n = 3000
+    tasks = [Task(i, f"t{i}", D(2026, 1, 5, 8), D(2026, 1, 5, 17)) for i in range(1, n + 1)]
+    rels = [Relation(i, i + 1) for i in range(1, n)]
+    validate(Project("p", D(2026, 1, 5), tasks, rels))          # no RecursionError
+    with pytest.raises(ValueError, match="cycle"):
+        validate(Project("p", D(2026, 1, 5), tasks, rels + [Relation(n, 1)]))
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_large_project_engages_difat(tmp_path):
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task
+    note = "Generated task note. " * 60                 # ~1.2 KB of RTF each
+    tasks = [Task(i, f"Task {i}", D(2027, 1, 4, 8), D(2027, 1, 4, 17), notes=note)
+             for i in range(1, 4001)]
+    out = tmp_path / "big.mpp"
+    MppWriter("templates/template.mpp").write(Project("big", D(2027, 1, 4, 8), tasks), str(out))
+    assert out.stat().st_size > 6_800_000               # more than 109 FAT sectors
+    ole = olefile.OleFileIO(str(out))
+    assert ole.get_size("   114/TBkndTask/Var2Data") > 4_000_000
+    assert len(B.parse_fixed_meta_auto(ole.openstream("   114/TBkndTask/FixedMeta").read(), 47)[2]) > 4000

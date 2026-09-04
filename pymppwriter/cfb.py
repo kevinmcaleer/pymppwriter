@@ -177,23 +177,30 @@ def write_cfb(root: Storage, root_clsid: bytes = b"\0" * 16) -> bytes:
         dir_raw = dir_raw[: i * 128] + _dir_entry(None) + dir_raw[(i + 1) * 128:]
     dir_start = add_chain(bytes(dir_raw))
 
-    # FAT sectors (iterate: FAT sectors need FAT entries too)
+    # FAT sectors (iterate: FAT sectors — and any DIFAT sectors listing them
+    # beyond the header's 109 slots — need FAT entries too)
+    DIFAT_PER_SECTOR = FAT_PER_SECTOR - 1      # last dword chains to the next DIFAT sector
     n_data = len(sectors)
-    n_fat = 0
+    n_fat = n_difat = 0
     while True:
-        needed = -(-(n_data + n_fat) // FAT_PER_SECTOR)
-        if needed == n_fat:
+        needed_fat = -(-(n_data + n_fat + n_difat) // FAT_PER_SECTOR)
+        needed_difat = -(-max(0, needed_fat - 109) // DIFAT_PER_SECTOR)
+        if (needed_fat, needed_difat) == (n_fat, n_difat):
             break
-        n_fat = needed
-    if n_fat > 109:
-        raise NotImplementedError("DIFAT sectors not supported (file > ~6.8 MB)")
+        n_fat, n_difat = needed_fat, needed_difat
 
-    fat_full = fat + [FATSECT] * n_fat
+    fat_full = fat + [FATSECT] * n_fat + [DIFSECT] * n_difat
     fat_full += [FREESECT] * (n_fat * FAT_PER_SECTOR - len(fat_full))
     fat_raw = b"".join(struct.pack("<I", v) for v in fat_full)
     fat_sector_ids = list(range(n_data, n_data + n_fat))
+    difat_sector_ids = list(range(n_data + n_fat, n_data + n_fat + n_difat))
     for i in range(n_fat):
         sectors.append(fat_raw[i * SECTOR:(i + 1) * SECTOR])
+    for i in range(n_difat):
+        chunk = fat_sector_ids[109 + i * DIFAT_PER_SECTOR: 109 + (i + 1) * DIFAT_PER_SECTOR]
+        chunk += [FREESECT] * (DIFAT_PER_SECTOR - len(chunk))
+        nxt = difat_sector_ids[i + 1] if i + 1 < n_difat else ENDOFCHAIN
+        sectors.append(b"".join(struct.pack("<I", v) for v in chunk) + struct.pack("<I", nxt))
 
     # ---- header ------------------------------------------------------------
     hdr = bytearray(SECTOR)
@@ -206,8 +213,8 @@ def write_cfb(root: Storage, root_clsid: bytes = b"\0" * 16) -> bytes:
                      0,               # transaction signature
                      MINI_CUTOFF,
                      minifat_start, minifat_count,
-                     ENDOFCHAIN, 0)   # DIFAT start / count
-    difat = fat_sector_ids + [FREESECT] * (109 - len(fat_sector_ids))
+                     difat_sector_ids[0] if n_difat else ENDOFCHAIN, n_difat)
+    difat = fat_sector_ids[:109] + [FREESECT] * max(0, 109 - len(fat_sector_ids))
     struct.pack_into("<109I", hdr, 76, *difat)
 
     return bytes(hdr) + b"".join(sectors)

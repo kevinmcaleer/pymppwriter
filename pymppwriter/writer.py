@@ -8,6 +8,7 @@ and patching the fields we control.
 from __future__ import annotations
 import struct
 import uuid
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -248,6 +249,100 @@ class Project:
     currency_code: Optional[str] = None       # e.g. "GBP"
 
 
+class ScheduleWarning(UserWarning):
+    """A declared date Project's scheduler will not agree with."""
+
+
+def weekly_overlap_minutes(a_pattern, b_pattern) -> int:
+    """Working minutes a normal week has in common between two work patterns."""
+    (a_windows, _), (b_windows, _) = a_pattern, b_pattern
+    total = 0
+    for wd in range(7):
+        for a0, a1 in a_windows.get(wd, ()):
+            for b0, b1 in b_windows.get(wd, ()):
+                total += max(0, min(a1, b1) - max(a0, b0))
+    return total
+
+
+def link_driven_start(rel: Relation, pred_eff, succ_dur_tenths: int, pattern):
+    """Where a relation puts its successor's start, or None if it does not
+    drive the start (FF and SF constrain the finish instead)."""
+    p_start, p_finish = pred_eff[0], pred_eff[1]
+    lag = int(round(rel.lag_days * TENTHS_PER_DAY))
+    if rel.type == "FS":
+        # a zero-duration successor sits on the predecessor's finish; anything
+        # longer starts at the next working moment after it
+        if lag == 0 and succ_dur_tenths == 0:
+            return p_finish
+        return advance_working(p_finish, lag, pattern)
+    if rel.type == "SS":
+        return advance_working(p_start, lag, pattern) if lag else p_start
+    return None
+
+
+def validate(project: Project) -> None:
+    """Reject structurally invalid projects before Project ever sees them:
+    duplicate/invalid uids, broken parent references, outline levels that
+    do not form a valid row-order outline, and dependency cycles."""
+    seen = set()
+    for t in project.tasks:
+        if t.uid <= 0:
+            raise ValueError(f"task uid must be > 0 (got {t.uid})")
+        if t.uid in seen:
+            raise ValueError(f"duplicate task uid {t.uid}")
+        seen.add(t.uid)
+        if t.finish < t.start:
+            raise ValueError(f"task {t.uid}: finish before start")
+    # row-order outline: level may rise by at most 1, and the parent must be
+    # the nearest preceding task one level up (level 1 tasks have parent 0)
+    stack: List[Task] = []
+    for t in project.tasks:
+        if t.outline_level < 1:
+            raise ValueError(f"task {t.uid}: outline_level must be >= 1")
+        while stack and stack[-1].outline_level >= t.outline_level:
+            stack.pop()
+        expected_parent = stack[-1].uid if t.outline_level > 1 else 0
+        if t.outline_level > 1 and (not stack or stack[-1].outline_level != t.outline_level - 1):
+            raise ValueError(f"task {t.uid}: outline_level {t.outline_level} does not follow "
+                             f"a level {t.outline_level - 1} task")
+        if t.parent_uid != expected_parent:
+            raise ValueError(f"task {t.uid}: parent_uid {t.parent_uid} does not match the "
+                             f"outline (expected {expected_parent})")
+        stack.append(t)
+    # relations: endpoints exist, no self-links, no cycles
+    succs: Dict[int, List[int]] = {}
+    for rel in project.relations:
+        for end in (rel.pred_uid, rel.succ_uid):
+            if end not in seen:
+                raise ValueError(f"relation references unknown task uid {end}")
+        if rel.pred_uid == rel.succ_uid:
+            raise ValueError(f"task {rel.pred_uid} cannot depend on itself")
+        succs.setdefault(rel.pred_uid, []).append(rel.succ_uid)
+    # depth-first search with an explicit stack: a plan may chain far more
+    # tasks than Python's recursion limit allows
+    state: Dict[int, int] = {}    # 0/absent=new, 1=on the current path, 2=done
+    for root in succs:
+        if state.get(root, 0):
+            continue
+        state[root] = 1
+        trail = [root]
+        stack = [(root, iter(succs[root]))]
+        while stack:
+            uid, pending = stack[-1]
+            nxt = next(pending, None)
+            if nxt is None:
+                state[uid] = 2
+                stack.pop()
+                trail.pop()
+            elif state.get(nxt) == 1:      # still on the current path = cycle
+                cycle = trail[trail.index(nxt):] + [nxt]
+                raise ValueError(f"dependency cycle: {' -> '.join(map(str, cycle))}")
+            elif state.get(nxt, 0) == 0:
+                state[nxt] = 1
+                trail.append(nxt)
+                stack.append((nxt, iter(succs.get(nxt, ()))))
+
+
 class MppWriter:
     def __init__(self, template_path: str):
         self.root = load_cfb(template_path)
@@ -257,6 +352,12 @@ class MppWriter:
         self.task_fm, self.task_bit = self._parse_class_map(B.PROPS_TASK_FIELD_MAP)
         self.rsc_fm, self.rsc_bit = self._parse_class_map(B.PROPS_RESOURCE_FIELD_MAP)
         self.assn_fm, self.assn_bit = self._parse_class_map(B.PROPS_ASSIGNMENT_FIELD_MAP)
+        self.template_start = self.props.get(B.PROPS_PROJECT_START_DATE, b"")
+        rel_fm, _ = self._parse_class_map(B.PROPS_RELATION_FIELD_MAP)
+        # the unmapped relation trailer moved between eras: 2010 files (native
+        # id 9 at offset 0) use type@12, lagUnits@14, lag@16; M365 files use
+        # type@12, lag@14, lagUnits@18 (verified against Project-written files)
+        self.rel_2010_layout = rel_fm.get(9) is not None and rel_fm[9].offset == 0
         self._load_prototypes()
 
     # ------------------------------------------------------------ helpers --
@@ -468,6 +569,7 @@ class MppWriter:
 
     # ------------------------------------------------------------- build ---
     def build(self, project: Project) -> bytes:
+        validate(project)
         by_uid: Dict[int, Task] = {t.uid: t for t in project.tasks}
         children: Dict[int, List[Task]] = {}
         for t in project.tasks:
@@ -491,6 +593,44 @@ class MppWriter:
                 eff[t.uid] = (s, f, working_tenths(s, f, pattern))
             else:
                 eff[t.uid] = (t.start, t.finish, int(round(t.duration_days * TENTHS_PER_DAY)))
+
+        # earliest start each task's predecessors imply, so we only pin dates
+        # the links do not already produce (Project's own files constrain
+        # typed-in dates, not link-driven ones)
+        link_start: Dict[int, datetime] = {}
+        for rel in project.relations:
+            if rel.pred_uid not in eff or rel.succ_uid not in eff:
+                continue
+            s = link_driven_start(rel, eff[rel.pred_uid], eff[rel.succ_uid][2], pattern)
+            if s is None:
+                continue                  # FF/SF do not drive the start directly
+            prev = link_start.get(rel.succ_uid)
+            if prev is None or s > prev:
+                link_start[rel.succ_uid] = s
+        # Project cannot put a resource to work on a task whose own calendar
+        # shares no working time with the resource's: it drops the resource
+        # calendar and pops "Not enough common working time" on open
+        named_cals = {c.name: c for c in project.calendars}
+        assigned = {a.task_uid for a in project.assignments}
+        for t in project.tasks:
+            cal = named_cals.get(t.calendar) if t.calendar else None
+            if cal is not None and t.uid in assigned and not weekly_overlap_minutes(
+                    _work_pattern(cal), pattern):
+                warnings.warn(f"task {t.uid} {t.name!r} is on calendar {cal.name!r}, which shares "
+                              f"no working time with the resource calendars; Project will schedule "
+                              f"it ignoring the resource calendar", ScheduleWarning, stacklevel=2)
+
+        # a declared start earlier than the links allow is one Project will
+        # move on its next recalculation: warn rather than write a schedule
+        # that will not survive a round trip
+        for uid, implied in link_start.items():
+            task = by_uid[uid]
+            if task.manual or children.get(uid) or task.calendar is not None:
+                continue                  # manual, summary and other-calendar tasks differ
+            if eff[uid][0] < implied:
+                warnings.warn(f"task {uid} {task.name!r} starts {eff[uid][0]:%Y-%m-%d %H:%M} but "
+                              f"its predecessors put it at {implied:%Y-%m-%d %H:%M}; "
+                              f"Project will move it", ScheduleWarning, stacklevel=2)
 
         # assignment work per task (milli-minutes), rolled up into summaries
         for asn in project.assignments:
@@ -635,9 +775,17 @@ class MppWriter:
                 self._put(rec, "CALENDAR_UNIQUE_ID", "<i", cal_uid)
                 self._put_bit(m, m2, "CALENDAR_UNIQUE_ID", True)
             if task is not None:
-                if task.constraint is not None:
-                    self._put(rec, "CONSTRAINT_TYPE", "<H", CONSTRAINT_TYPES[task.constraint])
-                    self._put_ts(rec, "CONSTRAINT_DATE", task.constraint_date)
+                constraint, cdate = task.constraint, task.constraint_date
+                if (constraint is None and not manual and not is_summary
+                        and start > project.start and link_start.get(uid) != start):
+                    # hold the declared start against the scheduling engine, the
+                    # way Project itself pins a typed-in start date (otherwise an
+                    # ASAP task snaps back to its earliest date on recalculation);
+                    # tasks their predecessors already place stay ASAP
+                    constraint, cdate = "SNET", start
+                if constraint is not None:
+                    self._put(rec, "CONSTRAINT_TYPE", "<H", CONSTRAINT_TYPES[constraint])
+                    self._put_ts(rec, "CONSTRAINT_DATE", cdate)
                     self._put_bit(m, m2, "CONSTRAINT_TYPE", True)
                 if task.deadline is not None:
                     self._put_ts(rec, "DEADLINE", task.deadline)
@@ -736,8 +884,12 @@ class MppWriter:
         for i, r in enumerate(project.relations, start=1):
             rec = bytearray(self.rel_proto["rec"]); rec2 = bytearray(self.rel_proto["rec2"])
             struct.pack_into("<III", rec, 0, i, r.pred_uid, r.succ_uid)
-            struct.pack_into("<HH", rec, 12, REL_TYPES[r.type], 7)  # lag units: days
-            struct.pack_into("<i", rec, 16, int(round(r.lag_days * TENTHS_PER_DAY)))
+            struct.pack_into("<H", rec, 12, REL_TYPES[r.type])
+            lag = int(round(r.lag_days * TENTHS_PER_DAY))
+            if self.rel_2010_layout:
+                struct.pack_into("<Hi", rec, 14, 7, lag)        # lag units (days), lag
+            else:
+                struct.pack_into("<iH", rec, 14, lag, 7)        # lag, lag units (days)
             rec2[0:16] = uuid.uuid4().bytes_le
             rec2[16:32] = by_uid[r.pred_uid].guid
             rec2[32:48] = by_uid[r.succ_uid].guid
@@ -950,6 +1102,19 @@ class MppWriter:
         if B.PROPS_TITLE in self.props:
             self.props[B.PROPS_TITLE] = project.title.encode("utf-16-le") + b"\0" * 4   # Props strings: double NUL
         self._set(f"{PRJ}/Props", B.build_props(self.props_hdr, self.props, self.props_order))
+
+        # Gantt scroll position: the view state (CV_iew) stores the visible date
+        # as a timestamp equal to the template's project start — retarget it so
+        # the chart opens on this schedule instead of the template's save date
+        new_start = B.encode_timestamp(project.start)
+        if len(self.template_start) == 4 and self.template_start != new_start:
+            try:
+                vd = self._get("   214/CV_iew/Var2Data")
+                if self.template_start in vd:
+                    self._set("   214/CV_iew/Var2Data",
+                              vd.replace(self.template_start, new_start))
+            except KeyError:
+                pass
 
         # document metadata: SummaryInformation (title, subject, author, keywords,
         # comments) + DocumentSummaryInformation (manager, company, category)
