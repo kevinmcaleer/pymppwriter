@@ -1124,12 +1124,19 @@ export class MppWriter {
       for (const name of ["WORK", "REGULAR_WORK", "REMAINING_WORK"]) put(name, "f64", work);
       const tpct = pctEff.get(taskUid) ?? 0;
       let reached = e.start;
+      // what the planned-work contour below must agree with: at 0% nothing is
+      // done yet, so "remaining" is everything
+      let remainingWork = work;
+      let remainingTenths = e.tenths;
       if (tpct) {
         put("ACTUAL_WORK", "f64", (work * tpct) / 100);
-        put("REMAINING_WORK", "f64", (work * (100 - tpct)) / 100);
+        remainingWork = (work * (100 - tpct)) / 100;
+        put("REMAINING_WORK", "f64", remainingWork);
         // how far work has got: Project reconciles the task's actuals against
         // this, and a stop still at the start knocked a finished task back to 99%
-        reached = tpct === 100 ? e.finish : advanceWorking(e.start, Math.round((e.tenths * tpct) / 100), pattern);
+        const elapsedTenths = Math.round((e.tenths * tpct) / 100);
+        remainingTenths = e.tenths - elapsedTenths;
+        reached = tpct === 100 ? e.finish : advanceWorking(e.start, elapsedTenths, pattern);
       }
       this.putfTs(this.assnFm, ASSN_NATIVE, rec, rec2, "START", e.start);
       for (const name of ["RESUME", "STOP"]) this.putfTs(this.assnFm, ASSN_NATIVE, rec, rec2, name, reached);
@@ -1154,12 +1161,16 @@ export class MppWriter {
           payload = B.encodeTimestamp(this.now());
         } else if (typ === ASSN_NATIVE["PLANNED_WORK_DATA"] && payload0.length >= 36) {
           // the planned-work contour: Project schedules the assignment from
-          // this blob, not from the fixed WORK field
+          // this blob, not from the fixed WORK field. Its native id (49 =
+          // RAW_TIMEPHASED_REMAINING_REGULAR_WORK) says it holds what is
+          // *left* to do, so a progressed assignment shrinks it to the
+          // remaining work over the remaining span (units stay put — the
+          // resource's units don't change with progress)
           const b2 = copy(payload0);
           const bd = dv(b2);
           bd.setFloat64(8, units * PCT_SCALE * 16, true);
-          bd.setFloat64(16, work, true);
-          bd.setUint32(24, e.tenths * 8, true);
+          bd.setFloat64(16, remainingWork, true);
+          bd.setUint32(24, remainingTenths * 8, true);
           payload = b2;
         }
         avarEntries.push({ uid: i, type: typ, payload });

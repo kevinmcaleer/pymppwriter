@@ -12,7 +12,9 @@ def summary(path):
     for r in pf.getResources():
         lines.append(f"R uid={r.getUniqueID()} '{r.getName()}'")
     for a in pf.getResourceAssignments():
-        lines.append(f"A task={a.getTaskUniqueID()} rsc={a.getResourceUniqueID()} units={a.getUnits()}")
+        lines.append(f"A task={a.getTaskUniqueID()} rsc={a.getResourceUniqueID()} units={a.getUnits()} "
+                     f"work={a.getWork()} pctWorkComplete={a.getPercentageWorkComplete()} "
+                     f"actualWork={a.getActualWork()} remainingWork={a.getRemainingWork()}")
     return "\n".join(lines)
 
 if __name__ == "__main__":
