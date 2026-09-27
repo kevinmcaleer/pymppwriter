@@ -399,6 +399,19 @@ what corrupted the file). Whether "empty 49 alone" avoids round two's corruption
 round one's 99% rollback is unknown without a real resave; the `ScheduleWarning` on a 100%-complete
 assigned task is left in place until that is checked.
 
+**Checked since (0.4.1, opened in Project M365): it reproduces round one** — a 100%-complete
+assigned task still shows 99%. So emptying 49 is not enough on its own, and together with round
+two (49 emptied *plus* a 50 contour: 100% accepted, finish lost) it points outside the two blobs.
+The strongest untested candidate is the assignment's own fixed fields: we have never written its
+`ACTUAL_START` (22), `ACTUAL_FINISH` (23) or `PERCENT_WORK_COMPLETE` (43), only the task's. An
+assignment with timephased actual work but no actual start is one Project could read as "not
+started" — which would explain both round two's collapse onto the start and today's 99%.
+`scripts/progress_variants.py build` writes the matrix that separates these (assignment actuals
+with and without the 50 contour, and three shapes of 49 at 100%) behind private writer switches
+that default to the shipped encoding; `scripts/progress_variants.py dump` prints a file's
+assignment fields and contours in full, for comparing against an assignment Project itself
+marked complete.
+
 The TypeScript port (`js/src/writer.ts`) received the same change; `js/test/writer.parity.test.ts`
 compares its output against the Python writer byte for byte on a project that includes a 50%-complete
 assigned task, and the two remain identical after the fix.
