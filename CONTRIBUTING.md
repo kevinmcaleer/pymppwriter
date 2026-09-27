@@ -121,6 +121,14 @@ After that, once:
    | Organization or user | `kevinmcaleer` |
    | Repository | `pymppwriter` |
    | Workflow filename | `npm-publish.yml` |
+   | Environment | *(leave blank)* |
+   | Allowed actions | tick **npm publish** |
+
+   **Allowed actions** matters: a trusted publisher created after
+   3 Sep 2026 only allows `npm stage publish` by default, and the workflow's
+   `npm publish` then fails with `403 Forbidden … OIDC permission denied for
+   this action`. (A `404 Not Found` on the `PUT` instead means npm matched no
+   trusted publisher at all — check the three names above.)
 
 ### Cutting a release
 
