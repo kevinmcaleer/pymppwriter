@@ -106,6 +106,11 @@ CONSTRAINT_TYPES = {"ASAP": 0, "ALAP": 1, "MSO": 2, "MFO": 3,
                     "SNET": 4, "SNLT": 5, "FNET": 6, "FNLT": 7}
 TASK_TYPES = {"fixed_units": 0, "fixed_duration": 1, "fixed_work": 2}
 CAL_NAME_VAR, CAL_DATA_VAR = 1, 8
+ASSN_PROGRESS_DEFAULTS = {
+    "assn_actuals": False,        # ACTUAL_START / ACTUAL_FINISH / PERCENT_WORK_COMPLETE on the assignment
+    "actual_contour": False,      # var 50 at 100%
+    "remaining_at_100": "zero",   # var 49 at 100%: "zero" (count 1), "count0", or "full" (pre-0.4.1)
+}
 RSC_NATIVE = {"UNIQUE_ID": 27, "ID": 0, "NAME": 1, "INITIALS": 2, "EMAIL_ADDRESS": 35,
               "MAX_UNITS": 4, "CALENDAR_UID": 56, "GUID": 728, "CALENDAR_GUID": 729,
               "POSITION": 730}
@@ -113,6 +118,7 @@ ASSN_NATIVE = {"UNIQUE_ID": 0, "TASK_UNIQUE_ID": 1, "RESOURCE_UNIQUE_ID": 2, "ST
                "FINISH": 21, "RESUME": 24, "STOP": 264, "UNITS": 7, "WORK": 8,
                "ACTUAL_WORK": 10, "REGULAR_WORK": 11, "REMAINING_WORK": 12, "GUID": 636,
                "TASK_GUID": 637, "RESOURCE_GUID": 638, "CREATED": 634,
+               "ACTUAL_START": 22, "ACTUAL_FINISH": 23, "PERCENT_WORK_COMPLETE": 43,
                "PLANNED_WORK_DATA": 49,      # timephased remaining regular work
                "ACTUAL_WORK_DATA": 50}       # timephased actual regular work
 REL_TYPES = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
@@ -125,6 +131,23 @@ UNITS_CODES = {"m": 3, "h": 5, "d": 7, "w": 9, "mo": 11}
 SUMMARY_UNITS = 0x15           # what Project writes in the units word of summary rows
 ESTIMATED_FLAG = 0x20          # OR'ed into the units word; shows as "3 days?"
 WORK_WINDOWS = ((8 * 60, 12 * 60), (13 * 60, 17 * 60))   # Standard calendar, minutes from midnight
+
+
+def actual_work_contour(units: float, work: float, dur_tenths: int) -> bytes:
+    """Var entry 50 (RAW_TIMEPHASED_ACTUAL_REGULAR_WORK) for an assignment whose
+    work is all done, in the single-segment shape Project wrote in DR&R.mpp:
+    header <count=1><24><36>, then units x 10000, actual work (milli-minutes) and
+    actual duration (tenths x 8), with one block at +32 read the way MPXJ reads
+    it — start offset 0, cumulative work, units, end offset."""
+    blob = bytearray(56)
+    struct.pack_into("<HHI", blob, 0, 1, 24, 36)
+    for off in (8, 44):
+        struct.pack_into("<d", blob, off, units * PCT_SCALE)
+    for off in (16, 36):
+        struct.pack_into("<d", blob, off, work)
+    for off in (24, 52):
+        struct.pack_into("<I", blob, off, dur_tenths * 8)
+    return bytes(blob)
 
 
 def working_tenths(start: datetime, finish: datetime, pattern=None) -> int:
@@ -572,6 +595,10 @@ class MppWriter:
         factory and a fixed clock and the same project writes the same bytes,
         which is how the TypeScript port is checked against this one."""
         self.new_guid = new_guid or (lambda: uuid.uuid4().bytes_le)
+        # how a finished assignment is encoded (#56). Private: the defaults are
+        # the shipped encoding, and scripts/progress_variants.py flips them to
+        # build the files a Microsoft Project resave has to judge
+        self._assn_progress = dict(ASSN_PROGRESS_DEFAULTS)
         self.now = now or (lambda: datetime.now().replace(second=0, microsecond=0))
         self.root = load_cfb(template_path)
         self.prj = self.root.storage_path(PRJ)
@@ -1342,6 +1369,16 @@ class MppWriter:
                 remaining_dur_tenths = dur_tenths - elapsed_dur_tenths
                 reached = (finish if tpct == 100 else
                            advance_working(start, elapsed_dur_tenths, pattern))
+            # placeholder rows keep the shipped encoding, so an unassigned task
+            # stays the control in scripts/progress_variants.py
+            opts = ASSN_PROGRESS_DEFAULTS if empty else self._assn_progress
+            if opts["assn_actuals"] and tpct:
+                put("PERCENT_WORK_COMPLETE", "<H", tpct)
+                self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "ACTUAL_START", start)
+                self._bitf(self.assn_bit, ASSN_NATIVE, m, m2, "ACTUAL_START", True)
+                if tpct == 100:
+                    self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "ACTUAL_FINISH", finish)
+                    self._bitf(self.assn_bit, ASSN_NATIVE, m, m2, "ACTUAL_FINISH", True)
             self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "START", start)
             for name in ("RESUME", "STOP"):
                 self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, name, reached)
@@ -1355,6 +1392,7 @@ class MppWriter:
             afixed.append(bytes(rec)); afixed2.append(bytes(rec2))
             ameta.append(m); ameta2.append(m2)
             nvars = 0
+            contour = tpct == 100 and opts["actual_contour"]
             for typ, payload in self.assn_proto["var"]:
                 if typ == ASSN_NATIVE["CREATED"]:
                     payload = B.encode_timestamp(self.now())
@@ -1379,11 +1417,22 @@ class MppWriter:
                     # writing work*0.08 here made a 50%-units assignment display half
                     # its real duration (the two only coincide at 100% units)
                     b2 = bytearray(payload)
+                    if tpct == 100 and opts["remaining_at_100"] == "full":
+                        remaining_work, remaining_dur_tenths = work, dur_tenths
                     struct.pack_into("<d", b2, 8, asn.units * PCT_SCALE * 16)
                     struct.pack_into("<d", b2, 16, remaining_work)
                     struct.pack_into("<I", b2, 24, remaining_dur_tenths * 8)
+                    if tpct == 100 and opts["remaining_at_100"] == "count0":
+                        struct.pack_into("<H", b2, 0, 0)
                     payload = bytes(b2)
+                elif typ == ASSN_NATIVE["ACTUAL_WORK_DATA"] and contour:
+                    continue                         # replaced below
                 avar_entries.append((i, typ, payload))
+                nvars += 1
+            if contour:
+                avar_entries.append((i, ASSN_NATIVE["ACTUAL_WORK_DATA"],
+                                     actual_work_contour(asn.units, work, dur_tenths)))
+                self._bitf(self.assn_bit, ASSN_NATIVE, m, m2, "ACTUAL_WORK_DATA", True)
                 nvars += 1
             for typ in ASSN_VAR_EMPTY:               # 16 zero bytes, as Project writes them
                 if typ == 667 and not empty:

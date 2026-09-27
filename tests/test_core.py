@@ -1056,3 +1056,28 @@ def test_resource_and_assignment_baseline_ids_match_project():
     for a in project.assignments:
         for b in a.baselines.values():
             assert b.start is not None and b.finish is not None and b.finish >= b.start
+
+
+def test_actual_work_contour_is_a_single_finished_segment():
+    # var 50 for a finished assignment, read the way MPXJ reads it: a block count,
+    # the actual span at +24 (tenths x 8), and one block at +32 starting at the
+    # assignment's start and carrying all the work at the assignment's units
+    from pymppwriter.writer import actual_work_contour
+    blob = actual_work_contour(0.5, 9600 * 100.0 * 0.5, 9600)
+    assert len(blob) == 56
+    assert struct.unpack_from("<HHI", blob, 0) == (1, 24, 36)
+    assert struct.unpack_from("<d", blob, 8)[0] == 5000.0
+    assert struct.unpack_from("<d", blob, 16)[0] == 480000.0
+    assert struct.unpack_from("<I", blob, 24)[0] == 9600 * 8
+    assert struct.unpack_from("<I", blob, 32)[0] == 0                 # block starts at the start
+    assert struct.unpack_from("<d", blob, 36)[0] == 480000.0          # cumulative work
+    assert struct.unpack_from("<d", blob, 44)[0] == 5000.0            # units
+    assert struct.unpack_from("<I", blob, 52)[0] == 9600 * 8
+
+
+def test_writer_ships_the_0_4_1_progress_encoding_by_default():
+    # the #56 switches are for scripts/progress_variants.py only: nothing changes
+    # for callers until a Project resave has picked a variant
+    from pymppwriter.writer import ASSN_PROGRESS_DEFAULTS
+    assert ASSN_PROGRESS_DEFAULTS == {"assn_actuals": False, "actual_contour": False,
+                                      "remaining_at_100": "zero"}
