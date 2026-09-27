@@ -71,7 +71,7 @@ PyPI rejects the token.
 2. Commit, then tag and push:
 
    ```bash
-   git tag v0.4.0 && git push origin v0.4.0
+   git tag v0.4.1 && git push origin v0.4.1
    ```
 
 3. Publish a GitHub Release for that tag. The workflow runs the tests, builds
@@ -91,7 +91,7 @@ publishes:
 | tag | package | index |
 |---|---|---|
 | `v0.4.1` | `pymppwriter` (Python) | PyPI |
-| `js-v0.4.0` | `mppwriter` (`js/`) | npm |
+| `js-v0.4.1` | `mppwriter` (`js/`) | npm |
 
 The two packages are byte-compatible implementations of the same library and
 **share a version line**, so `pymppwriter X.Y.Z` and `mppwriter X.Y.Z` describe
@@ -128,7 +128,7 @@ After that, once:
 2. Tag and push, then publish the GitHub Release for that tag:
 
    ```bash
-   git tag js-v0.4.0 && git push origin js-v0.4.0
+   git tag js-v0.4.1 && git push origin js-v0.4.1
    ```
 
 **Actions → npm-publish → Run workflow** does a dry run: it installs, typechecks,
