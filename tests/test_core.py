@@ -659,6 +659,54 @@ def test_writer_replaces_the_templates_progress_mark(tmp_path):
 
 
 @pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_partial_progress_shrinks_the_planned_work_contour(tmp_path):
+    """Var entry 49 is native id RAW_TIMEPHASED_REMAINING_REGULAR_WORK: on a
+    partially-progressed assignment it must hold what is left to do, not the
+    task's full total (that mismatch — reported against a real 53%-complete,
+    fixed_duration, single-assignment task — is one plausible cause of
+    Project's "resource is assigned outside dates ... duration will change"
+    dialog; see docs/FORMAT_NOTES.md "Progress on assigned tasks"). This
+    checks the contour agrees with the fixed ACTUAL_WORK/REMAINING_WORK
+    fields MPXJ reads, for every percentage in the 1-99 range, regardless of
+    task_type."""
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task, Resource, Assignment
+    from pymppwriter.writer import ASSN_NATIVE, ASSN_META_SIZE, WORK_SCALE, advance_working
+    for pct, task_type in ((53, "fixed_duration"), (53, "fixed_units"), (1, "fixed_duration"),
+                           (99, "fixed_duration")):
+        p = Project("t", D(2026, 9, 7, 8),
+                    [Task(1, "Bradford optimisation", D(2026, 9, 7, 8), D(2026, 9, 8, 17),
+                          duration_days=2, percent_complete=pct, task_type=task_type)],
+                    resources=[Resource(1, "Jack")], assignments=[Assignment(1, 1)])
+        w = MppWriter("templates/template.mpp")
+        out = tmp_path / f"o{pct}{task_type}.mpp"
+        w.write(p, str(out))
+        ole = olefile.OleFileIO(str(out))
+        r = lambda s: ole.openstream("   114/TBkndAssn/" + s).read()
+        amitems = B.parse_fixed_meta_auto(r("FixedMeta"), ASSN_META_SIZE)[2]
+        arecs = B.split_fixed_data(r("FixedData"), amitems)
+        rem_it = w.assn_fm[ASSN_NATIVE["REMAINING_WORK"]]
+        remaining_work = struct.unpack_from("<d", arecs[0], rem_it.offset)[0]
+
+        _, avt, _ = B.parse_var_meta(r("VarMeta"))
+        blob = B.read_var(r("Var2Data"), avt[1][ASSN_NATIVE["PLANNED_WORK_DATA"]])
+        blob_work = struct.unpack_from("<d", blob, 16)[0]
+        blob_dur_tenths = struct.unpack_from("<I", blob, 24)[0] / 8
+
+        # the contour's remaining work must match the fixed REMAINING_WORK field
+        # exactly -- writing the full total here regardless of progress (the bug
+        # this test guards against) left the two permanently 100%/0% apart
+        assert blob_work == remaining_work
+        elapsed_tenths = round(9600 * pct / 100)
+        assert blob_dur_tenths == 9600 - elapsed_tenths
+        assert remaining_work == 9600 * WORK_SCALE * (100 - pct) / 100.0
+        # RESUME/STOP still mark how far work has reached, unaffected by this fix
+        reached_it = w.assn_fm[ASSN_NATIVE["RESUME"]]
+        reached = B.decode_timestamp(arecs[0], reached_it.offset)
+        assert reached == advance_working(D(2026, 9, 7, 8), elapsed_tenths)
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
 def test_writer_warns_when_a_finished_task_has_assignments(tmp_path):
     from datetime import datetime as D
     from pymppwriter import MppWriter, Project, Task, Resource, Assignment

@@ -335,25 +335,76 @@ So the whole stream fixes it while none of its individual differences does — t
 combination inside it. For an unprogressed assignment our records are byte-identical to Project's
 apart from the CREATED timestamp, which makes the remaining differences few but evidently interacting.
 
-### Progress on assigned tasks (open)
+### Progress on assigned tasks
 A task at 100% that has resource assignments does not survive a resave: Project keeps its dates but
 recalculates the progress and shows the task at 99% with a zero duration. It reconciles a task's
 actuals against its assignments' timephased data, and the assignment var entries are a pair — id 49
-is *remaining* regular work (what we write, holding the total), id 50 *actual* regular work (which
-we do not write at all).
+is native `RAW_TIMEPHASED_REMAINING_REGULAR_WORK`, id 50 `RAW_TIMEPHASED_ACTUAL_REGULAR_WORK` (which
+we do not write).
 
-Three verification rounds narrowed it without closing it:
-* leaving 49 holding the work and writing no 50 keeps the task's start and finish and loses only
-  the percentage — the behaviour shipped today, and the reason `ScheduleWarning` flags this case;
+Three verification rounds narrowed the 100% case without closing it:
+* leaving 49 holding the full work and writing no 50 keeps the task's start and finish and loses
+  only the percentage — the behaviour shipped before this fix, and the reason `ScheduleWarning`
+  flags the 100% case;
 * emptying 49 and writing 50 in Project's own shape (`<H count=1><H 24><I 36>`, then `+8` units
   x 10000, `+16` actual work in milli-minutes, `+24` actual duration in tenths x 8, repeated at
   `+36`, `+44`, `+52`; 56 bytes, structurally byte-identical to `DR&R.mpp`) makes Project accept
   100% — but it rewrites the blob's count word to 0 and collapses the task onto its start, so
   something outside the blob still tells it no work was done;
-* partial progress (50%) round-trips exactly as written, with or without assignments.
-Project writes entry 50 on every assignment, progressed or not, so its presence is not the gate.
+* partial progress (50%) was recorded as "round-trips exactly as written, with or without
+  assignments" — **but that claim was only ever checked by reading the generated file back
+  through MPXJ** (`scripts/mpxj_oracle.py`, i.e. Method 2 in CONTRIBUTING.md), never resaved in
+  real Microsoft Project (Method 3). MPXJ takes the fixed `ACTUAL_WORK`/`REMAINING_WORK` fields at
+  face value and never independently recomputes a schedule from var entry 49 the way Project's own
+  engine does, so it could not have caught a mismatch between the two.
+
+**The mismatch, found while investigating a downstream report (NoodlePlanner, Snakie#975) of a
+single-assignment, `fixed_duration`, 53%-complete task triggering Project's "the resource is
+assigned outside dates for task ... duration of this fixed duration task will change to accommodate
+the resource assignment" dialog on open:** despite its name, the writer wrote the **full,
+undiminished total work and duration** into var entry 49 regardless of `percent_complete` — at any
+value from 1 to 99, not just 100. Meanwhile the fixed `ACTUAL_WORK`/`REMAINING_WORK` fields *were*
+correctly scaled by the percentage, and `RESUME`/`STOP` correctly marked how far into the task work
+had reached. So a 53%-complete assignment declared (fixed fields) "56.4 of 120 hours left, work
+reached day 8" while simultaneously declaring (var 49, "Project schedules the assignment from this
+blob" per the note above) "all 120 hours, over the full 15 days, still to do" — the task-level
+progress and the assignment-level schedule flatly disagreeing. This reproduces at every percentage
+in the 1-99 range and is independent of `task_type` (`fixed_duration`, `fixed_units` and
+`fixed_work` all produce byte-identical var-49 contours, confirmed with `scripts/mpxj_oracle.py`
+across `pct0`/`pct50`/`pct53`/`pct99`/`pct100` × all three types) — task_type only changes the
+`TYPE` fixed field, nothing in the assignment math. The 53% case is not a distinct bug from the
+documented 100% one; the whole 1-99% range has always shared the same contour-vs-fixed-fields
+inconsistency the 100% case is the most visible instance of, and the "50% is fine" note above
+described what MPXJ reported, not what Project's own reconciliation does with the file.
+
+**Fix:** var entry 49 now holds `remaining` work and duration — `work * (100 - pct) / 100` and
+`duration_tenths - round(duration_tenths * pct / 100)` — matching the same figures already computed
+for `REMAINING_WORK` and the `RESUME`/`STOP` marks, instead of the task's full total. At 0% this is
+unchanged (remaining == total, the case already known to round-trip), and the units field (`+8`)
+is untouched — a resource's assigned units don't change with progress. Verified with
+`scripts/mpxj_oracle.py` (dates, work, `getPercentageWorkComplete()`, `getActualWork()` and
+`getRemainingWork()` all read back consistently across 0/50/53/99/100%, `fixed_duration`,
+`fixed_units` and `fixed_work`) and by reading the raw var-49 bytes back out of the generated file
+directly (`tests/test_core.py::test_writer_partial_progress_shrinks_the_planned_work_contour`).
+**This has not been confirmed against real Microsoft Project** (Method 3 in CONTRIBUTING.md was not
+available for this change) — it removes a concrete, byte-level inconsistency that is a plausible
+cause of the reported dialog, and MPXJ continues to read the file exactly as intended, but whether
+it actually stops Project from offering to change the duration is unconfirmed until resaved in a
+real copy of Project.
+
+At 100%, this fix incidentally changes that case too: var 49 is now emptied (0 work, 0 duration,
+count word still 1) *without* writing var 50 — a fourth variant, distinct from all three rounds
+above (round one never emptied 49; round two emptied 49 but also added 50, and that combination is
+what corrupted the file). Whether "empty 49 alone" avoids round two's corruption or reproduces
+round one's 99% rollback is unknown without a real resave; the `ScheduleWarning` on a 100%-complete
+assigned task is left in place until that is checked.
+
+The TypeScript port (`js/src/writer.ts`) received the same change; `js/test/writer.parity.test.ts`
+compares its output against the Python writer byte for byte on a project that includes a 50%-complete
+assigned task, and the two remain identical after the fix.
 
 ## Not yet handled
 Resource rates and costs, material and cost resource types, per-resource working weeks (resource
-calendars are written as copies of Standard), assignment actual work / percent complete, baselines,
-timephased data, and subprojects.
+calendars are written as copies of Standard), timephased *actual* work (var id 50 — remaining work
+is written, see "Progress on assigned tasks" above), baselines, other timephased data, and
+subprojects.

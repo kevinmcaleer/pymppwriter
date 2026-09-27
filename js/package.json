@@ -1,6 +1,6 @@
 {
   "name": "mppwriter",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Write and read Microsoft Project .mpp files from TypeScript \u2014 no Java, no .NET, no Project install",
   "license": "MIT",
   "author": "Kevin McAleer",

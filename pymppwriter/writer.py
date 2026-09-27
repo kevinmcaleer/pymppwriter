@@ -1327,14 +1327,21 @@ class MppWriter:
                 put(name, "<d", work)
             tpct = pct_eff.get(asn.task_uid, 0)
             reached = start
+            # what var 49 (RAW_TIMEPHASED_REMAINING_REGULAR_WORK) below must agree
+            # with: at 0% nothing is done yet, so "remaining" is everything
+            remaining_work = work
+            remaining_dur_tenths = dur_tenths
             if tpct:
                 put("ACTUAL_WORK", "<d", work * tpct / 100.0)
-                put("REMAINING_WORK", "<d", work * (100 - tpct) / 100.0)
+                remaining_work = work * (100 - tpct) / 100.0
+                put("REMAINING_WORK", "<d", remaining_work)
                 # how far work has got: Project reconciles the task's actuals
                 # against this, and a stop still at the start knocked a
                 # 100%-complete task back to 99% with a zero duration
+                elapsed_dur_tenths = int(round(dur_tenths * tpct / 100))
+                remaining_dur_tenths = dur_tenths - elapsed_dur_tenths
                 reached = (finish if tpct == 100 else
-                           advance_working(start, int(round(dur_tenths * tpct / 100)), pattern))
+                           advance_working(start, elapsed_dur_tenths, pattern))
             self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "START", start)
             for name in ("RESUME", "STOP"):
                 self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, name, reached)
@@ -1353,16 +1360,28 @@ class MppWriter:
                     payload = B.encode_timestamp(self.now())
                 elif typ == ASSN_NATIVE["PLANNED_WORK_DATA"] and len(payload) >= 36:
                     # planned-work contour: Project schedules the assignment from this
-                    # blob, not from the fixed WORK field (which MPXJ reads).
-                    # +8 double: units * 16 (80000.0 at 50% in a Project-saved file),
-                    # +16 double: total work (milli-minutes),
-                    # +24 uint32: elapsed assignment duration in tenths * 8 —
-                    # writing work*0.08 here made a 50% assignment display half its
-                    # real duration (the two only coincide at 100% units)
+                    # blob, not from the fixed WORK field (which MPXJ reads). Its own
+                    # native id (49 = RAW_TIMEPHASED_REMAINING_REGULAR_WORK) says it
+                    # holds what is *left* to do, so a progressed assignment must
+                    # shrink it to the remaining work over the remaining span —
+                    # writing the full, undiminished total here regardless of percent
+                    # complete (the previous behaviour, still correct at 0%) leaves a
+                    # progressed task's assignment schedule contradicting its own
+                    # ACTUAL_WORK/REMAINING_WORK fields and stop mark, which is one
+                    # plausible cause of Project's "resource is assigned outside
+                    # dates ... duration will change" dialog on a partially-complete
+                    # assigned task (unconfirmed without real Project — see
+                    # FORMAT_NOTES "Progress on assigned tasks").
+                    # +8 double: units * 16 (80000.0 at 50% in a Project-saved file) —
+                    # unaffected by progress, the resource's units don't change,
+                    # +16 double: remaining work (milli-minutes),
+                    # +24 uint32: remaining assignment duration in tenths * 8 —
+                    # writing work*0.08 here made a 50%-units assignment display half
+                    # its real duration (the two only coincide at 100% units)
                     b2 = bytearray(payload)
                     struct.pack_into("<d", b2, 8, asn.units * PCT_SCALE * 16)
-                    struct.pack_into("<d", b2, 16, work)
-                    struct.pack_into("<I", b2, 24, dur_tenths * 8)
+                    struct.pack_into("<d", b2, 16, remaining_work)
+                    struct.pack_into("<I", b2, 24, remaining_dur_tenths * 8)
                     payload = bytes(b2)
                 avar_entries.append((i, typ, payload))
                 nvars += 1
