@@ -57,6 +57,24 @@ const u16 = (v: number) => { const b = new Uint8Array(2); dv(b).setUint16(0, v, 
 const i32 = (v: number) => { const b = new Uint8Array(4); dv(b).setInt32(0, v, true); return b; };
 const f64 = (v: number) => { const b = new Uint8Array(8); dv(b).setFloat64(0, v, true); return b; };
 
+/**
+ * Var entry 50 (RAW_TIMEPHASED_ACTUAL_REGULAR_WORK) for an assignment whose work
+ * is all done, in the single-segment shape Project writes: header
+ * <count=1><24><36>, then units x 10000, actual work (milli-minutes) and actual
+ * duration (tenths x 8), with one block at +32 starting at the assignment's start.
+ */
+export function actualWorkContour(units: number, work: number, tenths: number): Uint8Array {
+  const blob = new Uint8Array(56);
+  const d = dv(blob);
+  d.setUint16(0, 1, true);
+  d.setUint16(2, 24, true);
+  d.setUint32(4, 36, true);
+  for (const off of [8, 44]) d.setFloat64(off, units * PCT_SCALE, true);
+  for (const off of [16, 36]) d.setFloat64(off, work, true);
+  for (const off of [24, 52]) d.setUint32(off, (tenths * 8) >>> 0, true);
+  return blob;
+}
+
 function concat(parts: Uint8Array[]): Uint8Array {
   let n = 0;
   for (const p of parts) n += p.length;
@@ -583,14 +601,15 @@ export class MppWriter {
         );
       }
     }
-    // Project reconciles a finished task against its assignments' timephased
-    // actual work, which is not written yet
+    // Project reconciles a finished task against its assignments' actuals and
+    // timephased actual work. Both are written now, in Project's own shape, but
+    // no Project resave has confirmed the task keeps 100%
     for (const uid of new Set(assignments.map((a) => a.taskUid))) {
       if ((byUid.get(uid)?.percentComplete ?? 0) === 100) {
         warn(
           `task ${uid} ${JSON.stringify(byUid.get(uid)!.name)} is 100% complete and has assignments; ` +
-            `Project recalculates progress from timephased actual work, which is not written yet, ` +
-            `and will show it at 99%`,
+            `Project recalculates progress from the assignments' actual work, and this encoding is ` +
+            `not yet confirmed to keep it at 100% (older versions showed 99%)`,
         );
       }
     }
@@ -1112,7 +1131,7 @@ export class MppWriter {
       const rec2 = copy(this.assnProto!.rec2);
       const m = copy(this.assnProto!.meta);
       const m2 = copy(this.assnProto!.meta2);
-      const put = (name: string, kind: "u32" | "i32" | "f64", value: number) =>
+      const put = (name: string, kind: "u32" | "i32" | "u16" | "f64", value: number) =>
         this.putf(this.assnFm, ASSN_NATIVE, rec, rec2, name, kind, value);
       put("UNIQUE_ID", "u32", i);
       put("TASK_UNIQUE_ID", "u32", taskUid);
@@ -1138,6 +1157,19 @@ export class MppWriter {
         remainingTenths = e.tenths - elapsedTenths;
         reached = tpct === 100 ? e.finish : advanceWorking(e.start, elapsedTenths, pattern);
       }
+      // a real assignment carries its own actuals, as Project writes them: without
+      // them Project read a finished assignment as not started and showed the
+      // task at 99% (#56). Placeholder rows keep the 0.4.1 encoding, which an
+      // unassigned task already round-trips with
+      if (!empty && tpct) {
+        put("PERCENT_WORK_COMPLETE", "u16", tpct);
+        this.putfTs(this.assnFm, ASSN_NATIVE, rec, rec2, "ACTUAL_START", e.start);
+        this.bitf(this.assnBit, ASSN_NATIVE, m, m2, "ACTUAL_START", true);
+        if (tpct === 100) {
+          this.putfTs(this.assnFm, ASSN_NATIVE, rec, rec2, "ACTUAL_FINISH", e.finish);
+          this.bitf(this.assnBit, ASSN_NATIVE, m, m2, "ACTUAL_FINISH", true);
+        }
+      }
       this.putfTs(this.assnFm, ASSN_NATIVE, rec, rec2, "START", e.start);
       for (const name of ["RESUME", "STOP"]) this.putfTs(this.assnFm, ASSN_NATIVE, rec, rec2, name, reached);
       this.putfTs(this.assnFm, ASSN_NATIVE, rec, rec2, "FINISH", e.finish);
@@ -1155,6 +1187,7 @@ export class MppWriter {
       ameta.push(m);
       ameta2.push(m2);
       let nvars = 0;
+      const contour = !empty && tpct === 100;
       for (const [typ, payload0] of this.assnProto!.var) {
         let payload = payload0;
         if (typ === ASSN_NATIVE["CREATED"]) {
@@ -1172,8 +1205,18 @@ export class MppWriter {
           bd.setFloat64(16, remainingWork, true);
           bd.setUint32(24, remainingTenths * 8, true);
           payload = b2;
+        } else if (typ === ASSN_NATIVE["ACTUAL_WORK_DATA"] && contour) {
+          continue; // replaced below
         }
         avarEntries.push({ uid: i, type: typ, payload });
+        nvars += 1;
+      }
+      if (contour) {
+        avarEntries.push({
+          uid: i, type: ASSN_NATIVE["ACTUAL_WORK_DATA"]!,
+          payload: actualWorkContour(units, work, e.tenths),
+        });
+        this.bitf(this.assnBit, ASSN_NATIVE, m, m2, "ACTUAL_WORK_DATA", true);
         nvars += 1;
       }
       for (const typ of ASSN_VAR_EMPTY) {
