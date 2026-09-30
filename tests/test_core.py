@@ -1075,9 +1075,11 @@ def test_actual_work_contour_is_a_single_finished_segment():
     assert struct.unpack_from("<I", blob, 52)[0] == 9600 * 8
 
 
-def test_writer_ships_the_0_4_1_progress_encoding_by_default():
-    # the #56 switches are for scripts/progress_variants.py only: nothing changes
-    # for callers until a Project resave has picked a variant
-    from pymppwriter.writer import ASSN_PROGRESS_DEFAULTS
-    assert ASSN_PROGRESS_DEFAULTS == {"assn_actuals": False, "actual_contour": False,
+def test_writer_ships_variant_c_for_finished_assignments():
+    # #56: a finished assignment carries its own actuals and an actual-work
+    # contour; placeholder rows keep the 0.4.1 encoding that already round-trips
+    from pymppwriter.writer import ASSN_PROGRESS_DEFAULTS, ASSN_PROGRESS_PLACEHOLDER
+    assert ASSN_PROGRESS_DEFAULTS == {"assn_actuals": True, "actual_contour": True,
                                       "remaining_at_100": "zero"}
+    assert ASSN_PROGRESS_PLACEHOLDER == {"assn_actuals": False, "actual_contour": False,
+                                         "remaining_at_100": "zero"}

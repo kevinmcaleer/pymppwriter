@@ -106,11 +106,20 @@ CONSTRAINT_TYPES = {"ASAP": 0, "ALAP": 1, "MSO": 2, "MFO": 3,
                     "SNET": 4, "SNLT": 5, "FNET": 6, "FNLT": 7}
 TASK_TYPES = {"fixed_units": 0, "fixed_duration": 1, "fixed_work": 2}
 CAL_NAME_VAR, CAL_DATA_VAR = 1, 8
+# How a progressed assignment is encoded (#56). The defaults write a finished
+# assignment the way Project does: its own actual start, finish and % work
+# complete, the actual-work contour (var 50) and an emptied remaining contour
+# (var 49) — variant C of scripts/progress_variants.py. Without them Project
+# reconciled a 100%-complete assigned task back to 99% with a zero duration.
 ASSN_PROGRESS_DEFAULTS = {
-    "assn_actuals": False,        # ACTUAL_START / ACTUAL_FINISH / PERCENT_WORK_COMPLETE on the assignment
-    "actual_contour": False,      # var 50 at 100%
+    "assn_actuals": True,         # ACTUAL_START / ACTUAL_FINISH / PERCENT_WORK_COMPLETE on the assignment
+    "actual_contour": True,       # var 50 at 100%
     "remaining_at_100": "zero",   # var 49 at 100%: "zero" (count 1), "count0", or "full" (pre-0.4.1)
 }
+# placeholder rows (no resource) keep the 0.4.1 encoding: an unassigned
+# 100%-complete task already round-trips through Project
+ASSN_PROGRESS_PLACEHOLDER = {"assn_actuals": False, "actual_contour": False,
+                             "remaining_at_100": "zero"}
 RSC_NATIVE = {"UNIQUE_ID": 27, "ID": 0, "NAME": 1, "INITIALS": 2, "EMAIL_ADDRESS": 35,
               "MAX_UNITS": 4, "CALENDAR_UID": 56, "GUID": 728, "CALENDAR_GUID": 729,
               "POSITION": 730}
@@ -596,8 +605,8 @@ class MppWriter:
         which is how the TypeScript port is checked against this one."""
         self.new_guid = new_guid or (lambda: uuid.uuid4().bytes_le)
         # how a finished assignment is encoded (#56). Private: the defaults are
-        # the shipped encoding, and scripts/progress_variants.py flips them to
-        # build the files a Microsoft Project resave has to judge
+        # the shipped encoding, and scripts/progress_variants.py overrides them
+        # to build the files a Microsoft Project resave has to judge
         self._assn_progress = dict(ASSN_PROGRESS_DEFAULTS)
         self.now = now or (lambda: datetime.now().replace(second=0, microsecond=0))
         self.root = load_cfb(template_path)
@@ -853,14 +862,15 @@ class MppWriter:
                               f"no working time with the resource calendars; Project will schedule "
                               f"it ignoring the resource calendar", ScheduleWarning, stacklevel=2)
 
-        # Project reconciles a finished task against its assignments' timephased
-        # actual work (var id 50), which we do not write: it accepts the dates
-        # but recalculates the progress, showing the task at 99%
+        # Project reconciles a finished task against its assignments' actuals and
+        # timephased actual work (var id 50). Both are written now, in Project's
+        # own shape, but no Project resave has confirmed the task keeps 100%
         for uid in {a.task_uid for a in project.assignments}:
             if by_uid[uid].percent_complete == 100:
                 warnings.warn(f"task {uid} {by_uid[uid].name!r} is 100% complete and has "
-                              f"assignments; Project recalculates progress from timephased actual "
-                              f"work, which is not written yet, and will show it at 99%",
+                              f"assignments; Project recalculates progress from the assignments' "
+                              f"actual work, and this encoding is not yet confirmed to keep it "
+                              f"at 100% (older versions showed 99%)",
                               ScheduleWarning, stacklevel=2)
 
         # a start on a window boundary (12:00, or the end of a half day) is not
@@ -1369,9 +1379,9 @@ class MppWriter:
                 remaining_dur_tenths = dur_tenths - elapsed_dur_tenths
                 reached = (finish if tpct == 100 else
                            advance_working(start, elapsed_dur_tenths, pattern))
-            # placeholder rows keep the shipped encoding, so an unassigned task
+            # placeholder rows keep the 0.4.1 encoding, so an unassigned task
             # stays the control in scripts/progress_variants.py
-            opts = ASSN_PROGRESS_DEFAULTS if empty else self._assn_progress
+            opts = ASSN_PROGRESS_PLACEHOLDER if empty else self._assn_progress
             if opts["assn_actuals"] and tpct:
                 put("PERCENT_WORK_COMPLETE", "<H", tpct)
                 self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "ACTUAL_START", start)

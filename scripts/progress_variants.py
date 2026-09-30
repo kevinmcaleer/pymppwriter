@@ -30,17 +30,18 @@ from pymppwriter.writer import ASSN_META_SIZE, ASSN_PROGRESS_DEFAULTS, PRJ  # no
 
 # name -> (what it tests, overrides of ASSN_PROGRESS_DEFAULTS)
 VARIANTS = {
-    "A": ("control: what 0.4.1 ships", {}),
-    "B": ("assignment actual start/finish/% work complete, contours as shipped",
-          {"assn_actuals": True}),
-    "C": ("B + actual-work contour (var 50), remaining contour zeroed",
+    "A": ("control: what 0.4.1 shipped",
+          {"assn_actuals": False, "actual_contour": False}),
+    "B": ("assignment actual start/finish/% work complete, contours as 0.4.1 shipped",
+          {"assn_actuals": True, "actual_contour": False}),
+    "C": ("B + actual-work contour (var 50), remaining contour zeroed (the default now)",
           {"assn_actuals": True, "actual_contour": True}),
     "D": ("C with the remaining contour's count word 0",
           {"assn_actuals": True, "actual_contour": True, "remaining_at_100": "count0"}),
     "E": ("D without the assignment actuals (isolates them against D)",
-          {"actual_contour": True, "remaining_at_100": "count0"}),
+          {"assn_actuals": False, "actual_contour": True, "remaining_at_100": "count0"}),
     "F": ("B with the full pre-0.4.1 remaining contour",
-          {"assn_actuals": True, "remaining_at_100": "full"}),
+          {"assn_actuals": True, "actual_contour": False, "remaining_at_100": "full"}),
 }
 
 

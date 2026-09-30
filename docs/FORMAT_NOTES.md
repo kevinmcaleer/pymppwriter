@@ -412,6 +412,15 @@ that default to the shipped encoding; `scripts/progress_variants.py dump` prints
 assignment fields and contours in full, for comparing against an assignment Project itself
 marked complete.
 
+**Shipped since: variant C is the default.** A real assignment now carries its own
+`ACTUAL_START` and `PERCENT_WORK_COMPLETE` at any progress, plus `ACTUAL_FINISH` at 100%. A finished
+one also gets the var 50 actual-work contour, and its var 49 is emptied (count word 1). This is the
+full shape Project writes for a completed assignment. Round two lacked only the assignment actuals,
+and that gap explains its collapse onto the start. Placeholder rows (no resource) keep the 0.4.1
+encoding, because an unassigned 100% task already round-trips. The pick has **not** been confirmed
+by a Project resave, so the `ScheduleWarning` stays. If C still shows 99%, `progress_variants.py
+build` still writes A (0.4.1) and B, D, E and F for comparison.
+
 The TypeScript port (`js/src/writer.ts`) received the same change; `js/test/writer.parity.test.ts`
 compares its output against the Python writer byte for byte on a project that includes a 50%-complete
 assigned task, and the two remain identical after the fix.
