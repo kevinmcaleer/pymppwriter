@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pymppwriter import MppWriter, Project, Task, Resource, Assignment  # noqa: E402
 from pymppwriter import blocks as B  # noqa: E402
 from pymppwriter.cfb import load_cfb  # noqa: E402
-from pymppwriter.writer import ASSN_META_SIZE, ASSN_PROGRESS_DEFAULTS, PRJ  # noqa: E402
+from pymppwriter.writer import ASSN_META_SIZE, ASSN_PROGRESS_DEFAULTS, ASSN_PROGRESS_PLACEHOLDER, PRJ  # noqa: E402
 
 # name -> (what it tests, overrides of ASSN_PROGRESS_DEFAULTS)
 VARIANTS = {
@@ -58,6 +58,42 @@ VARIANTS = {
     "L": ("C + the task fields only (isolates them)",
           {"task_marks": True}),
 }
+
+
+# unassigned 100% tasks (#1221): Project showed them at 99% with 0 days under the
+# 0.4.1 placeholder encoding. Overrides of ASSN_PROGRESS_PLACEHOLDER.
+PLACEHOLDER_VARIANTS = {
+    "P1": ("placeholder rows get var 49 (Project's 100% shape) and var 50",
+           {"actual_contour": True, "remaining_at_100": "project"}),
+    "P2": ("P1 + var 87, first day only",
+           {"actual_contour": True, "remaining_at_100": "project", "irregular_actual": "first_day"}),
+    "P3": ("P2 + the task fields (201, 1250, 1255)",
+           {"actual_contour": True, "remaining_at_100": "project", "irregular_actual": "first_day",
+            "task_marks": True}),
+}
+
+
+def placeholder_project() -> Project:
+    return Project(
+        "placeholder-variants", D(2026, 9, 7, 8),
+        [Task(1, "Unassigned, 2 days, 100%", D(2026, 9, 7, 8), D(2026, 9, 8, 17),
+              duration_days=2, percent_complete=100),
+         Task(2, "Unassigned, 1 day, 100%", D(2026, 9, 9, 8), D(2026, 9, 9, 17),
+              duration_days=1, percent_complete=100),
+         Task(3, "Assigned, 2 days, 100% (control)", D(2026, 9, 10, 8), D(2026, 9, 11, 17),
+              duration_days=2, percent_complete=100)],
+        resources=[Resource(1, "Tester")],
+        assignments=[Assignment(3, 1)])
+
+
+def build_placeholders(template: str, out_dir: str) -> None:
+    os.makedirs(out_dir, exist_ok=True)
+    for name, (what, overrides) in PLACEHOLDER_VARIANTS.items():
+        w = MppWriter(template)
+        w._placeholder_progress = dict(ASSN_PROGRESS_PLACEHOLDER, **overrides)
+        path = os.path.join(out_dir, f"variant-{name}.mpp")
+        w.write(placeholder_project(), path)
+        print(f"{path}  {what}")
 
 
 def sample_project() -> Project:
@@ -136,6 +172,9 @@ if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "build":
         build(sys.argv[2] if len(sys.argv) > 2 else "templates/template.mpp",
               sys.argv[3] if len(sys.argv) > 3 else "progress-variants")
+    elif len(sys.argv) >= 2 and sys.argv[1] == "placeholders":
+        build_placeholders(sys.argv[2] if len(sys.argv) > 2 else "templates/template.mpp",
+                           sys.argv[3] if len(sys.argv) > 3 else "placeholder-variants")
     elif len(sys.argv) == 3 and sys.argv[1] == "dump":
         dump(sys.argv[2])
     else:

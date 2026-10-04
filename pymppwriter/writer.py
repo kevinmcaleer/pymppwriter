@@ -647,6 +647,7 @@ class MppWriter:
         # the shipped encoding, and scripts/progress_variants.py overrides them
         # to build the files a Microsoft Project resave has to judge
         self._assn_progress = dict(ASSN_PROGRESS_DEFAULTS)
+        self._placeholder_progress = dict(ASSN_PROGRESS_PLACEHOLDER)
         self.now = now or (lambda: datetime.now().replace(second=0, microsecond=0))
         self.root = load_cfb(template_path)
         self.prj = self.root.storage_path(PRJ)
@@ -1130,8 +1131,9 @@ class MppWriter:
                 self._put_ts(rec, "RESUME", point)
                 for f in ("PERCENT_COMPLETE", "ACTUAL_START", "ACTUAL_DURATION"):
                     self._put_bit(m, m2, f, True)
-                if (pct == 100 and self._assn_progress["task_marks"] and task is not None
-                        and any(a.task_uid == task.uid for a in project.assignments)):
+                if (pct == 100 and task is not None and self._assn_progress["task_marks"]
+                        and (self._placeholder_progress["task_marks"]
+                             or any(a.task_uid == task.uid for a in project.assignments))):
                     # what Project leaves on a finished assigned task (#1221): a
                     # progress bit in flag word 201, outline-code recalc 1, and the
                     # prior-progress mark cleared
@@ -1432,7 +1434,7 @@ class MppWriter:
                            advance_working(start, elapsed_dur_tenths, pattern))
             # placeholder rows keep the 0.4.1 encoding, so an unassigned task
             # stays the control in scripts/progress_variants.py
-            opts = ASSN_PROGRESS_PLACEHOLDER if empty else self._assn_progress
+            opts = self._placeholder_progress if empty else self._assn_progress
             if opts["assn_actuals"] and tpct:
                 put("PERCENT_WORK_COMPLETE", "<H", tpct)
                 self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "ACTUAL_START", start)
