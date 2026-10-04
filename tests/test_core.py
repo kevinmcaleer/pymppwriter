@@ -1080,7 +1080,7 @@ def test_writer_ships_variant_c_for_finished_assignments():
     # contour; placeholder rows keep the 0.4.1 encoding that already round-trips
     from pymppwriter.writer import ASSN_PROGRESS_DEFAULTS, ASSN_PROGRESS_PLACEHOLDER
     assert ASSN_PROGRESS_DEFAULTS == {"assn_actuals": True, "actual_contour": True,
-                                      "remaining_at_100": "zero", "irregular_actual": None,
+                                      "remaining_at_100": "project", "irregular_actual": "first_day",
                                       "task_marks": False}
     assert ASSN_PROGRESS_PLACEHOLDER == {"assn_actuals": False, "actual_contour": False,
                                          "remaining_at_100": "zero", "irregular_actual": None,

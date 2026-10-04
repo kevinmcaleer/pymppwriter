@@ -106,16 +106,18 @@ CONSTRAINT_TYPES = {"ASAP": 0, "ALAP": 1, "MSO": 2, "MFO": 3,
                     "SNET": 4, "SNLT": 5, "FNET": 6, "FNLT": 7}
 TASK_TYPES = {"fixed_units": 0, "fixed_duration": 1, "fixed_work": 2}
 CAL_NAME_VAR, CAL_DATA_VAR = 1, 8
-# How a progressed assignment is encoded (#56). The defaults write a finished
-# assignment the way Project does: its own actual start, finish and % work
-# complete, the actual-work contour (var 50) and an emptied remaining contour
-# (var 49) — variant C of scripts/progress_variants.py. Without them Project
-# reconciled a 100%-complete assigned task back to 99% with a zero duration.
+# How a progressed assignment is encoded (#56, #1221). The defaults write a
+# finished assignment the way Project saves one: the actual-work contour (var 50),
+# the remaining contour (var 49) in its 100% shape, and the first day's working
+# windows (var 87) — variant H of scripts/progress_variants.py, the only one of
+# A-L that kept a 100%-complete assigned task at 100% and its full duration when
+# opened in Project. Without var 87 the task opened at 0 days; listing every day
+# in it (variants I, K) did the same.
 ASSN_PROGRESS_DEFAULTS = {
     "assn_actuals": True,         # ACTUAL_START / ACTUAL_FINISH / PERCENT_WORK_COMPLETE on the assignment
     "actual_contour": True,       # var 50 at 100%
-    "remaining_at_100": "zero",   # var 49 at 100%: "zero" (count 1), "count0", "project" or "full" (pre-0.4.1)
-    "irregular_actual": None,     # var 87 at 100%: None, "first_day" or "all_days"
+    "remaining_at_100": "project",  # var 49 at 100%: "project" (Project's own), "zero" (count 1), "count0" or "full" (pre-0.4.1)
+    "irregular_actual": "first_day",  # var 87 at 100%: "first_day" (Project's), "all_days" or None
     "task_marks": False,          # task fields 201 / 1250 / 1255 as Project leaves a finished assigned task
 }
 # placeholder rows (no resource) keep the 0.4.1 encoding: an unassigned
