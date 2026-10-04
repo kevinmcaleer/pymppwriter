@@ -1093,7 +1093,7 @@ def test_project_shaped_remaining_and_irregular_blobs():
     from datetime import datetime as D
     blob = project_remaining_at_100(1.0, 960000.0, 9600)
     # var 49 from Project's after.mpp (2-day, 100% units task at 100%)
-    assert blob.hex() == ("000020002c000000" + "00" * 36 + "004c2d41" + "00000000" + "00880341"
+    assert blob.hex() == ("000020002c000000" + "00" * 40 + "004c2d41" + "00000000" + "00880341"
                           + "00" * 8 + "002c0100")
     assert blob[:8].hex() == "000020002c000000"
     win = irregular_actual_windows({d: WORK_WINDOWS for d in range(5)}, frozenset(),
