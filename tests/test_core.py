@@ -1080,6 +1080,24 @@ def test_writer_ships_variant_c_for_finished_assignments():
     # contour; placeholder rows keep the 0.4.1 encoding that already round-trips
     from pymppwriter.writer import ASSN_PROGRESS_DEFAULTS, ASSN_PROGRESS_PLACEHOLDER
     assert ASSN_PROGRESS_DEFAULTS == {"assn_actuals": True, "actual_contour": True,
-                                      "remaining_at_100": "zero"}
+                                      "remaining_at_100": "zero", "irregular_actual": None,
+                                      "task_marks": False}
     assert ASSN_PROGRESS_PLACEHOLDER == {"assn_actuals": False, "actual_contour": False,
-                                         "remaining_at_100": "zero"}
+                                         "remaining_at_100": "zero", "irregular_actual": None,
+                                         "task_marks": False}
+
+
+def test_project_shaped_remaining_and_irregular_blobs():
+    # #1221: byte-for-byte what Project saved for a finished assigned task
+    from pymppwriter.writer import project_remaining_at_100, irregular_actual_windows, WORK_WINDOWS
+    from datetime import datetime as D
+    blob = project_remaining_at_100(1.0, 960000.0, 9600)
+    # var 49 from Project's after.mpp (2-day, 100% units task at 100%)
+    assert blob.hex() == ("000020002c000000" + "00" * 36 + "004c2d41" + "00000000" + "00880341"
+                          + "00" * 8 + "002c0100")
+    assert blob[:8].hex() == "000020002c000000"
+    win = irregular_actual_windows({d: WORK_WINDOWS for d in range(5)}, frozenset(),
+                                   D(2026, 10, 5, 8), D(2026, 10, 6, 17), False)
+    assert win[:16].hex() == "02000400100000000000000000000000" and len(win) == 32
+    assert len(irregular_actual_windows({d: WORK_WINDOWS for d in range(5)}, frozenset(),
+                                        D(2026, 10, 5, 8), D(2026, 10, 6, 17), True)) == 8 + 8 + 16 * 2

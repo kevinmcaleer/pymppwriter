@@ -6,7 +6,7 @@ value and never reconciles them against the timephased contours the way
 Project does. Two modes:
 
     python scripts/progress_variants.py build [template.mpp] [out_dir]
-        writes one file per candidate encoding (A-F below). Open each in
+        writes one file per candidate encoding (A-L below). Open each in
         Project and note, for task 1 "Assigned, done": % Complete, Duration,
         Finish, and whether a dialog appears on open.
 
@@ -42,6 +42,21 @@ VARIANTS = {
           {"assn_actuals": False, "actual_contour": True, "remaining_at_100": "count0"}),
     "F": ("B with the full pre-0.4.1 remaining contour",
           {"assn_actuals": True, "actual_contour": False, "remaining_at_100": "full"}),
+    # G-L: built from a before/after pair Project saved itself (#1221). Variants B-F
+    # all failed; what they never wrote is var 87, the 100% shape of var 49, and
+    # three task fields (201, 1250, 1255).
+    "G": ("C with var 49 exactly as Project saves it at 100%",
+          {"remaining_at_100": "project"}),
+    "H": ("G + var 87 (working windows), first day only as Project wrote it",
+          {"remaining_at_100": "project", "irregular_actual": "first_day"}),
+    "I": ("G + var 87 listing every day of the task",
+          {"remaining_at_100": "project", "irregular_actual": "all_days"}),
+    "J": ("H + the task fields Project changes (201, 1250, 1255)",
+          {"remaining_at_100": "project", "irregular_actual": "first_day", "task_marks": True}),
+    "K": ("I + the task fields",
+          {"remaining_at_100": "project", "irregular_actual": "all_days", "task_marks": True}),
+    "L": ("C + the task fields only (isolates them)",
+          {"task_marks": True}),
 }
 
 

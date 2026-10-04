@@ -114,12 +114,15 @@ CAL_NAME_VAR, CAL_DATA_VAR = 1, 8
 ASSN_PROGRESS_DEFAULTS = {
     "assn_actuals": True,         # ACTUAL_START / ACTUAL_FINISH / PERCENT_WORK_COMPLETE on the assignment
     "actual_contour": True,       # var 50 at 100%
-    "remaining_at_100": "zero",   # var 49 at 100%: "zero" (count 1), "count0", or "full" (pre-0.4.1)
+    "remaining_at_100": "zero",   # var 49 at 100%: "zero" (count 1), "count0", "project" or "full" (pre-0.4.1)
+    "irregular_actual": None,     # var 87 at 100%: None, "first_day" or "all_days"
+    "task_marks": False,          # task fields 201 / 1250 / 1255 as Project leaves a finished assigned task
 }
 # placeholder rows (no resource) keep the 0.4.1 encoding: an unassigned
 # 100%-complete task already round-trips through Project
 ASSN_PROGRESS_PLACEHOLDER = {"assn_actuals": False, "actual_contour": False,
-                             "remaining_at_100": "zero"}
+                             "remaining_at_100": "zero", "irregular_actual": None,
+                             "task_marks": False}
 RSC_NATIVE = {"UNIQUE_ID": 27, "ID": 0, "NAME": 1, "INITIALS": 2, "EMAIL_ADDRESS": 35,
               "MAX_UNITS": 4, "CALENDAR_UID": 56, "GUID": 728, "CALENDAR_GUID": 729,
               "POSITION": 730}
@@ -129,7 +132,8 @@ ASSN_NATIVE = {"UNIQUE_ID": 0, "TASK_UNIQUE_ID": 1, "RESOURCE_UNIQUE_ID": 2, "ST
                "TASK_GUID": 637, "RESOURCE_GUID": 638, "CREATED": 634,
                "ACTUAL_START": 22, "ACTUAL_FINISH": 23, "PERCENT_WORK_COMPLETE": 43,
                "PLANNED_WORK_DATA": 49,      # timephased remaining regular work
-               "ACTUAL_WORK_DATA": 50}       # timephased actual regular work
+               "ACTUAL_WORK_DATA": 50,       # timephased actual regular work
+               "ACTUAL_IRREGULAR_DATA": 87}  # TIMEPHASED_ACTUAL_IRREGULAR_WORK: working windows
 REL_TYPES = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
 NULL_RESOURCE_UID = -65535     # assignment row for a task with nobody assigned
 NULL_RESOURCE_GUID = bytes.fromhex("788bcba08c2a6d4300000000000000ff")
@@ -156,6 +160,39 @@ def actual_work_contour(units: float, work: float, dur_tenths: int) -> bytes:
         struct.pack_into("<d", blob, off, work)
     for off in (24, 52):
         struct.pack_into("<I", blob, off, dur_tenths * 8)
+    return bytes(blob)
+
+
+def project_remaining_at_100(units: float, work: float, dur_tenths: int) -> bytes:
+    """Var entry 49 as Project saves it once an assignment is 100% complete: the
+    count words and the leading block (+8..+31) emptied, the trailing block at
+    +44 still holding the full work, units x 16 and duration x 8 (before/after
+    pair saved by Project, #1221)."""
+    blob = bytearray(72)
+    struct.pack_into("<HHI", blob, 0, 0, 32, 44)
+    struct.pack_into("<d", blob, 44, work)
+    struct.pack_into("<d", blob, 52, units * PCT_SCALE * 16)
+    struct.pack_into("<I", blob, 68, dur_tenths * 8)
+    return bytes(blob)
+
+
+def irregular_actual_windows(windows, nonworking, start: datetime, finish: datetime, all_days: bool) -> bytes:
+    """Var entry 87 (TIMEPHASED_ACTUAL_IRREGULAR_WORK): <count><2*count><bytes of
+    timestamps>, 8 zero bytes, then each working window's start and finish.
+    Project wrote only the first day's two windows for a two-day task, so
+    all_days=False reproduces that and all_days=True lists every day."""
+    wins, day = [], start.date()
+    while day <= finish.date():
+        if day not in nonworking:
+            for w0, w1 in windows.get(day.weekday(), ()):
+                wins.append((datetime.combine(day, datetime.min.time()) + timedelta(minutes=w0),
+                             datetime.combine(day, datetime.min.time()) + timedelta(minutes=w1)))
+            if wins and not all_days:
+                break
+        day += timedelta(days=1)
+    blob = bytearray(struct.pack("<HHI", len(wins), 2 * len(wins), 8 * len(wins)) + bytes(8))
+    for a, b in wins:
+        blob += B.encode_timestamp(a) + B.encode_timestamp(b)
     return bytes(blob)
 
 
@@ -1091,6 +1128,18 @@ class MppWriter:
                 self._put_ts(rec, "RESUME", point)
                 for f in ("PERCENT_COMPLETE", "ACTUAL_START", "ACTUAL_DURATION"):
                     self._put_bit(m, m2, f, True)
+                if (pct == 100 and self._assn_progress["task_marks"] and task is not None
+                        and any(a.task_uid == task.uid for a in project.assignments)):
+                    # what Project leaves on a finished assigned task (#1221): a
+                    # progress bit in flag word 201, outline-code recalc 1, and the
+                    # prior-progress mark cleared
+                    it = self.task_fm.get(201)
+                    if it is not None and it.block == 0:
+                        rec[it.offset + 1] |= 0x90
+                    it = self.task_fm.get(1250)
+                    if it is not None and it.block == 1:
+                        struct.pack_into("<i", rec2, it.offset, 1)
+                    self._putf_ts(self.task_fm, NATIVE, rec, rec2, "SUMMARY_PROGRESS_PRIOR", None)
             extra_vars = []
             if task is not None:
                 if task.notes:
@@ -1435,6 +1484,8 @@ class MppWriter:
                     if tpct == 100 and opts["remaining_at_100"] == "count0":
                         struct.pack_into("<H", b2, 0, 0)
                     payload = bytes(b2)
+                    if tpct == 100 and opts["remaining_at_100"] == "project":
+                        payload = project_remaining_at_100(asn.units, work, dur_tenths)
                 elif typ == ASSN_NATIVE["ACTUAL_WORK_DATA"] and contour:
                     continue                         # replaced below
                 avar_entries.append((i, typ, payload))
@@ -1443,6 +1494,13 @@ class MppWriter:
                 avar_entries.append((i, ASSN_NATIVE["ACTUAL_WORK_DATA"],
                                      actual_work_contour(asn.units, work, dur_tenths)))
                 self._bitf(self.assn_bit, ASSN_NATIVE, m, m2, "ACTUAL_WORK_DATA", True)
+                nvars += 1
+            if tpct == 100 and opts["irregular_actual"]:
+                avar_entries.append((i, ASSN_NATIVE["ACTUAL_IRREGULAR_DATA"],
+                                     irregular_actual_windows(
+                                         *(pattern if pattern else ({wd: WORK_WINDOWS for wd in range(5)}, frozenset())),
+                                         start, finish, opts["irregular_actual"] == "all_days")))
+                self._bitf(self.assn_bit, ASSN_NATIVE, m, m2, "ACTUAL_IRREGULAR_DATA", True)
                 nvars += 1
             for typ in ASSN_VAR_EMPTY:               # 16 zero bytes, as Project writes them
                 if typ == 667 and not empty:
