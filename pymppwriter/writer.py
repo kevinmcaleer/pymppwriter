@@ -910,17 +910,6 @@ class MppWriter:
                               f"no working time with the resource calendars; Project will schedule "
                               f"it ignoring the resource calendar", ScheduleWarning, stacklevel=2)
 
-        # Project reconciles a finished task against its assignments' actuals and
-        # timephased actual work (var id 50). Both are written now, in Project's
-        # own shape, but no Project resave has confirmed the task keeps 100%
-        for uid in {a.task_uid for a in project.assignments}:
-            if by_uid[uid].percent_complete == 100:
-                warnings.warn(f"task {uid} {by_uid[uid].name!r} is 100% complete and has "
-                              f"assignments; Project recalculates progress from the assignments' "
-                              f"actual work, and this encoding is not yet confirmed to keep it "
-                              f"at 100% (older versions showed 99%)",
-                              ScheduleWarning, stacklevel=2)
-
         # a start on a window boundary (12:00, or the end of a half day) is not
         # a working moment: Project rolls it forward on the next recalculation
         for t in project.tasks:

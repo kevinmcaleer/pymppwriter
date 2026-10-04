@@ -654,19 +654,6 @@ export class MppWriter {
         );
       }
     }
-    // Project reconciles a finished task against its assignments' actuals and
-    // timephased actual work. Both are written now, in Project's own shape, but
-    // no Project resave has confirmed the task keeps 100%
-    for (const uid of new Set(assignments.map((a) => a.taskUid))) {
-      if ((byUid.get(uid)?.percentComplete ?? 0) === 100) {
-        warn(
-          `task ${uid} ${JSON.stringify(byUid.get(uid)!.name)} is 100% complete and has assignments; ` +
-            `Project recalculates progress from the assignments' actual work, and this encoding is ` +
-            `not yet confirmed to keep it at 100% (older versions showed 99%)`,
-        );
-      }
-    }
-
     const pStart = new Date(Math.min(...tasks.map((t) => eff.get(t.uid)!.start.getTime()), project.start.getTime()));
     const pFinish = new Date(Math.max(...tasks.map((t) => eff.get(t.uid)!.finish.getTime()), project.start.getTime()));
     const summaryGuid = this.newGuid();

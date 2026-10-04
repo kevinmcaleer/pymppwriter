@@ -455,9 +455,18 @@ complete from the task's own actual duration against that rebuilt duration.
 
 **Shipped now: every assignment row with progress, placeholder or not, carries var 50
 with the work done so far over the elapsed duration, var 49 with the remainder, and var 87 with
-the first worked day's windows**; at 100% var 49 takes Project's shape above. The 100%-assigned
-case is confirmed in Project; the partial and placeholder cases are the round-5 matrix
-(`progress_variants.py round5`, R1-R4) awaiting the same check.
+the first worked day's windows**; at 100% var 49 takes Project's shape above. **All of it is
+confirmed in Project** (round 5, `progress_variants.py round5`): R1, this encoding, opened every
+task of a six-task file (unassigned 2-day 100%, unassigned 4-day 50%, assigned 2-day 50%, 4-day
+50%, 4-day 25%, assigned 2-day 100%) at its written duration, dates and percentage. The other
+three files say what each piece does: without var 87 on the partial rows (R2) the 50% tasks
+opened at half their duration and the 25% one at 3 days / 17%; with var 87 listing *every* day
+worked, header corrected (R3), the 100% tasks opened at 0 days and the 4-day 50% ones at 2 days,
+so "the first day's windows only" is Project's rule, not an artefact of the earlier header bug;
+filling var 49's trailing block as well (R4) changed nothing. The earlier P1-P3 files showed the
+same for placeholder rows: var 49 + var 50 without var 87 (P1) opened at 0 days, with it (P2) at
+the right duration, and the task-field changes (P3) made no difference. The `ScheduleWarning` on
+a 100%-complete assigned task is gone.
 
 The TypeScript port (`js/src/writer.ts`) received the same change; `js/test/writer.parity.test.ts`
 compares its output against the Python writer byte for byte on a project that includes a 50%-complete
@@ -465,6 +474,6 @@ assigned task, and the two remain identical after the fix.
 
 ## Not yet handled
 Resource rates and costs, material and cost resource types, per-resource working weeks (resource
-calendars are written as copies of Standard), timephased *actual* work (var id 50 — remaining work
-is written, see "Progress on assigned tasks" above), baselines, other timephased data, and
-subprojects.
+calendars are written as copies of Standard), timephased work beyond the single actual and
+remaining segments progress needs (see "Progress on assigned tasks" above), baselines, other
+timephased data, and subprojects.

@@ -707,15 +707,17 @@ def test_writer_partial_progress_shrinks_the_planned_work_contour(tmp_path):
 
 
 @pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
-def test_writer_warns_when_a_finished_task_has_assignments(tmp_path):
+def test_writer_no_longer_warns_when_a_finished_task_has_assignments(tmp_path):
+    # #1221: the encoding is confirmed in Project, so the 99% warning is gone
+    import warnings as W
     from datetime import datetime as D
     from pymppwriter import MppWriter, Project, Task, Resource, Assignment
-    from pymppwriter.writer import ScheduleWarning
     p = Project("t", D(2026, 9, 7, 8),
                 [Task(1, "done", D(2026, 9, 7, 8), D(2026, 9, 8, 17), duration_days=2,
                       percent_complete=100)],
                 resources=[Resource(1, "Kevin")], assignments=[Assignment(1, 1)])
-    with pytest.warns(ScheduleWarning, match="99%"):
+    with W.catch_warnings():
+        W.simplefilter("error")
         MppWriter("templates/template.mpp").write(p, str(tmp_path / "o.mpp"))
 
 
