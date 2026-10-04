@@ -230,6 +230,36 @@ def test_writer_retargets_view_scroll(tmp_path):
 
 
 @pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
+def test_writer_refreshes_the_gantt_row_cache(tmp_path):
+    """#74: the CEdl record lists the rows the Gantt table last painted; left
+    as the template saved it, Project opens on the template's row count."""
+    from datetime import datetime as D
+    from pymppwriter import MppWriter, Project, Task
+    from pymppwriter.writer import MppWriter as W
+    tasks = [Task(i, f"T{i}", D(2027, 2, 1, 8), D(2027, 2, 1, 17)) for i in range(1, 12)]
+    out = tmp_path / "o.mpp"
+    MppWriter("templates/template.mpp").write(Project("t", D(2027, 2, 1, 8), tasks), str(out))
+    ole = olefile.OleFileIO(str(out))
+    vm = ole.openstream("   214/CEdl/VarMeta").read()
+    vd = ole.openstream("   214/CEdl/Var2Data").read()
+    _, _, entries = B.parse_var_meta(vm)
+    blobs = [vd[off + 4:off + 4 + struct.unpack_from("<I", vd, off)[0]] for _, off, typ, _ in entries if typ == 6]
+    assert blobs, "the template's Gantt view has no row cache record"
+    uids = b"".join(struct.pack("<I", i) for i in range(1, 12))
+    for blob in blobs:
+        _, props, _ = B.parse_props(blob)
+        assert props[W.EDL_ROWS].startswith(uids)
+        layout = props[W.EDL_LAYOUT]
+        assert struct.unpack_from("<I", layout, 0)[0] == 11
+        offsets = struct.unpack_from("<12I", layout, 4)
+        assert offsets == tuple(i * 42 for i in range(12))
+        assert props[W.EDL_PAINTED].startswith(uids)
+    assert struct.unpack("<I", vm[20:24])[0] == len(vd)
+    _, vprops, _ = B.parse_props(ole.openstream("   214/Props").read())
+    assert struct.unpack("<I", vprops[W.EDL_VAR2DATA_SIZE])[0] == len(vd)
+
+
+@pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
 def test_writer_project_metadata(tmp_path):
     from datetime import datetime as D
     from pymppwriter import MppWriter, Project, Task
@@ -330,8 +360,7 @@ def test_writer_end_to_end_with_template(tmp_path):
         assert bit(4, "ESTIMATED") == 1
         assert bit(2, "ESTIMATED") == 0
     # the template's phantom assignments are gone, but every leaf task still has
-    # a row of its own with the placeholder resource — Project opens the file on
-    # the template's row count without them
+    # a row of its own with the placeholder resource, as Project's own files do
     from pymppwriter.writer import ASSN_NATIVE, ASSN_META_SIZE, NULL_RESOURCE_UID
     ar = lambda s_: ole.openstream("   114/TBkndAssn/" + s_).read()
     aitems = B.parse_fixed_meta_auto(ar("FixedMeta"), ASSN_META_SIZE)[2]

@@ -255,6 +255,91 @@ export class MppWriter {
     return [fm, bit];
   }
 
+  // ------------------------------------------------------------- view cache --
+  static readonly VIEW_PRJ = "   214";
+  static readonly EDL_ROWS = 0x26400035;
+  static readonly EDL_LAYOUT = 0x2640003d;
+  static readonly EDL_PAINTED = 0x26400024;
+  static readonly EDL_VAR2DATA_SIZE = 0x10007; // 214/Props: CEdl is view class 7
+
+  /**
+   * Rewrite the CEdl row cache for `uids`, the visible rows in ID order.
+   *
+   * Each CEdl record is a Props blob (var type 6) for one sheet view. Three
+   * entries describe its rows: 0x..35 the row uids followed by a fixed trailer,
+   * 0x..3D the row count, n+1 pixel offsets (row height from the trailer that
+   * follows them) and the pane state, 0x..24 the painted rows padded with -1 to
+   * the slots the window had. See FORMAT_NOTES, "Files open on the template's
+   * row count". Templates without the record are left alone.
+   */
+  private refreshGanttRows(uids: number[]): void {
+    const edl = `${MppWriter.VIEW_PRJ}/CEdl`;
+    const vm = this.root.get(`${edl}/VarMeta`);
+    const vd = this.root.get(`${edl}/Var2Data`);
+    if (!vm || !vd) return;
+    const { entries } = B.parseVarMeta(vm);
+    if (!entries.length) return;
+    const u32s = (ns: number[]) => {
+      const out = new Uint8Array(ns.length * 4);
+      ns.forEach((v, i) => dv(out).setUint32(i * 4, v, true));
+      return out;
+    };
+    const rows = u32s(uids);
+    const n = uids.length;
+    const metaParts: Uint8Array[] = [copy(vm.subarray(0, 24))];
+    const dataParts: Uint8Array[] = [];
+    let dataLen = 0;
+    let changed = false;
+    for (const { uid, offset, type, unk } of entries) {
+      let blob = B.readVar(vd, offset);
+      if (type === 6 && blob.length >= 16) {
+        const { header, values, order } = B.parseProps(blob);
+        const rowsOld = values.get(MppWriter.EDL_ROWS);
+        const layout = values.get(MppWriter.EDL_LAYOUT);
+        if (rowsOld && layout) {
+          const oldN = dv(layout).getUint32(0, true);
+          const rowH = dv(layout).getUint16(4 + (oldN + 1) * 4, true) || 42;
+          values.set(MppWriter.EDL_ROWS, concat([rows, rowsOld.subarray(oldN * 4)]));
+          const offsets = Array.from({ length: n + 1 }, (_, i) => i * rowH);
+          values.set(MppWriter.EDL_LAYOUT, concat([u32s([n]), u32s(offsets), layout.subarray(4 + (oldN + 1) * 4)]));
+          const painted = values.get(MppWriter.EDL_PAINTED);
+          if (painted) {
+            const slots = Math.max(painted.length >> 2, n);
+            values.set(MppWriter.EDL_PAINTED, concat([rows, new Uint8Array(4 * (slots - n)).fill(0xff)]));
+          }
+          blob = B.buildProps(header, values, order);
+          changed = true;
+        }
+      }
+      const entry = new Uint8Array(12);
+      dv(entry).setUint32(0, uid, true);
+      dv(entry).setUint32(4, dataLen, true);
+      dv(entry).setUint16(8, type, true);
+      dv(entry).setUint16(10, unk, true);
+      metaParts.push(entry);
+      const chunk = new Uint8Array(4 + blob.length);
+      dv(chunk).setUint32(0, blob.length, true);
+      chunk.set(blob, 4);
+      dataParts.push(chunk);
+      dataLen += chunk.length;
+    }
+    if (!changed) return;
+    const meta = concat(metaParts);
+    dv(meta).setUint32(8, entries.length, true);
+    dv(meta).setUint32(20, dataLen, true);
+    this.set(`${edl}/VarMeta`, meta);
+    this.set(`${edl}/Var2Data`, concat(dataParts));
+    // the view storage's Props gates each class's Var2Data read at the
+    // declared length, like the 114 storage's does
+    const vp = this.root.get(`${MppWriter.VIEW_PRJ}/Props`);
+    if (!vp) return;
+    const { header, values, order } = B.parseProps(vp);
+    if (values.has(MppWriter.EDL_VAR2DATA_SIZE)) {
+      values.set(MppWriter.EDL_VAR2DATA_SIZE, u32s([dataLen]));
+      this.set(`${MppWriter.VIEW_PRJ}/Props`, B.buildProps(header, values, order));
+    }
+  }
+
   private get(path: string): Uint8Array {
     const data = this.root.get(path);
     if (!data) throw new Error(`template has no stream ${path}`);
@@ -1142,8 +1227,7 @@ export class MppWriter {
       }
     }
     // Project keeps an assignment row for every leaf task, with a placeholder
-    // resource where nobody is assigned; without them it opens on the
-    // template's row count until the view is rebuilt
+    // resource where nobody is assigned, as Project's own files do
     const assignedSet = new Set(assignments.map((a) => a.taskUid));
     // a placeholder row has no Assignment to carry baselines, so it takes the
     // task's own — which is what Project writes on these rows
@@ -1391,6 +1475,12 @@ export class MppWriter {
         this.set("   214/CV_iew/Var2Data", out);
       }
     }
+
+    // Gantt row cache (#74): the view storage's CEdl record remembers the rows
+    // the Gantt table last painted — task uids and a pixel offset per row — and
+    // Project paints exactly those on open until the view is rebuilt. Left as
+    // the template saved it, every file opened on the template's three rows.
+    this.refreshGanttRows(tasks.map((t) => t.uid));
 
     // document metadata
     const si = this.root.get("SummaryInformation");
