@@ -1075,16 +1075,17 @@ def test_actual_work_contour_is_a_single_finished_segment():
     assert struct.unpack_from("<I", blob, 52)[0] == 9600 * 8
 
 
-def test_writer_ships_variant_c_for_finished_assignments():
-    # #56: a finished assignment carries its own actuals and an actual-work
-    # contour; placeholder rows keep the 0.4.1 encoding that already round-trips
+def test_writer_ships_project_shaped_progress_for_every_assignment_row():
+    # #56 / #1221: a progressed assignment carries its actual-work contour (var 50),
+    # the remaining contour (var 49) and the first worked day's windows (var 87) at
+    # any percentage; placeholder rows (no resource) get the same encoding, since
+    # an unassigned 100% task opened at 99% / 0 days without it
     from pymppwriter.writer import ASSN_PROGRESS_DEFAULTS, ASSN_PROGRESS_PLACEHOLDER
-    assert ASSN_PROGRESS_DEFAULTS == {"assn_actuals": True, "actual_contour": True,
-                                      "remaining_at_100": "project", "irregular_actual": "first_day",
+    assert ASSN_PROGRESS_DEFAULTS == {"assn_actuals": True, "actual_contour": "any",
+                                      "remaining_at_100": "project", "remaining_block": False,
+                                      "irregular_actual": "first_day", "irregular_partial": True,
                                       "task_marks": False}
-    assert ASSN_PROGRESS_PLACEHOLDER == {"assn_actuals": False, "actual_contour": False,
-                                         "remaining_at_100": "zero", "irregular_actual": None,
-                                         "task_marks": False}
+    assert ASSN_PROGRESS_PLACEHOLDER == ASSN_PROGRESS_DEFAULTS
 
 
 def test_project_shaped_remaining_and_irregular_blobs():
@@ -1097,7 +1098,17 @@ def test_project_shaped_remaining_and_irregular_blobs():
                           + "00" * 8 + "002c0100")
     assert blob[:8].hex() == "000020002c000000"
     win = irregular_actual_windows({d: WORK_WINDOWS for d in range(5)}, frozenset(),
-                                   D(2026, 10, 5, 8), D(2026, 10, 6, 17), False)
+                                   D(2026, 10, 5, 8), D(2026, 10, 6, 17), "first_day")
     assert win[:16].hex() == "02000400100000000000000000000000" and len(win) == 32
-    assert len(irregular_actual_windows({d: WORK_WINDOWS for d in range(5)}, frozenset(),
-                                        D(2026, 10, 5, 8), D(2026, 10, 6, 17), True)) == 8 + 8 + 16 * 2
+    # var 87 from Project's after.mpp: 08:00-12:00 and 13:00-17:00 on the first day
+    assert win[16:] == (B.encode_timestamp(D(2026, 10, 5, 8)) + B.encode_timestamp(D(2026, 10, 5, 12))
+                        + B.encode_timestamp(D(2026, 10, 5, 13)) + B.encode_timestamp(D(2026, 10, 5, 17)))
+    every = irregular_actual_windows({d: WORK_WINDOWS for d in range(5)}, frozenset(),
+                                     D(2026, 10, 5, 8), D(2026, 10, 6, 17), "all")
+    # the third header word is the record offset, so it stays 16 whatever the count
+    assert every[:8].hex() == "04000800" + "10000000" and len(every) == 16 + 16 * 2
+    # a stop point inside a window clips the last record to it
+    half = irregular_actual_windows({d: WORK_WINDOWS for d in range(5)}, frozenset(),
+                                    D(2026, 10, 5, 8), D(2026, 10, 5, 10), "all")
+    assert half[:2].hex() == "0100" and half[16:] == (B.encode_timestamp(D(2026, 10, 5, 8))
+                                                      + B.encode_timestamp(D(2026, 10, 5, 10)))
