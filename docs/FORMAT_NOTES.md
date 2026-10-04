@@ -309,31 +309,40 @@ The template's copies of these records cannot be reused (Project joins them to t
 they override the task's duration), which is why an early version dropped them entirely; they have to
 be regenerated per task instead.
 
-### Files open on the template's row count (open)
-Every file this library writes opens in Project showing only as many rows as the template had (three),
-until the view is switched, at which point all rows appear. The data is correct throughout — only the
-first paint is wrong.
+### Files open on the template's row count (#74, fixed)
+Every file this library wrote opened in Project showing only as many rows as the template had (three),
+until the view was switched, at which point all rows appeared. The data was correct throughout — only the
+first paint was wrong.
 
-Ten rounds of transplant bisection against a Project resave of the same project narrowed it to
-`TBkndAssn`, and no further:
+The cause is in the **view storage**, not the task or assignment tables. `   214/CEdl` holds one record per
+sheet view that Project has painted (the template's "Gantt Chart" with the "Entry" table), a Props blob
+(var type 6, high word `0x2040`) remembering the rows it last drew:
 
-| swapped in from a Project-written file | result |
+| key | contents |
 |---|---|
-| the whole `214` view storage (33 streams, byte-identical) | still wrong |
-| `114/Props`, task streams, resources, calendars, links | still wrong |
-| CFB container (Project's streams rewrapped by our writer) | **correct** — the container is fine |
-| `TBkndAssn`, whole class | **correct** |
-| `TBkndAssn/FixedMeta` alone | **correct** |
-| `TBkndAssn/VarMeta` + `Var2Data` alone | **correct** |
-| `FixedMeta` header dword 6 -> 4 (every Project file has 4) | still wrong |
-| per-item flag byte 14, `0x02` -> `0x06` | still wrong |
-| `Fixed2Meta` item last byte -> `0x08` | still wrong |
-| var-count byte set to Project's values | still wrong |
-| an empty var 50 added on progressed assignments | still wrong |
+| `0x26400035` | the visible rows as task uids, then a 12-byte trailer (`c0fd0f00 00000000 00000000`) |
+| `0x2640003D` | row count `n`, then `n+1` pixel offsets (`0, 42, 84, …`), then `u16` row height, `u16` pane count, `u16 0`, and 30 bytes of timescale state per pane |
+| `0x26400024` | the painted rows as uids, padded with `0xFFFFFFFF` to the number of row slots the window had |
+| `0x26400017` | the table's columns as field ids (`0x0B40xxxx`) |
+| `0x26400018`, `0x26400019` | the view and table names |
+| `0x26400028` | the selected column |
+| `0x26400031` | the file's path, written on save |
 
-So the whole stream fixes it while none of its individual differences does — the trigger is some
-combination inside it. For an unprogressed assignment our records are byte-identical to Project's
-apart from the CREATED timestamp, which makes the remaining differences few but evidently interacting.
+Project paints exactly the rows the cache lists, so a template saved with three tasks keeps painting rows
+1–3 (with the new file's task names, since the uids coincide) until something forces the view to rebuild.
+A resave of the same project rewrote the three lists to all eleven rows and bumped the class's Var2Data
+length in `   214/Props` (`0x10007`; the view storage's Props gates each class's var read at the declared
+length exactly as the `114` storage's `0x1000x` keys do — class 7 is CEdl, 1 CV_iew, 2 CFilter, 3 CTable).
+
+The writer now rewrites those three entries for the tasks it writes (every task but the uid-0 project
+summary, in ID order, at the template's row height) and updates the length gate. Templates without a
+CEdl record are left alone.
+
+Why the earlier bisection pointed at `TBkndAssn`: transplanting a Project-written assignment stream into
+a generated file changes the assignment uids or var layout under the tasks, and Project then rebuilds the
+whole schedule and its views on load, which repaints the rows as a side effect. The "fix" was Project's
+repair path, not the assignment data. The `214` row of that table was wrong for the same reason in
+reverse: a `214` storage taken from a resave of a *different* project lists that project's uids.
 
 ### Progress on assigned tasks
 A task at 100% that has resource assignments does not survive a resave: Project keeps its dates but

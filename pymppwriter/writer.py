@@ -684,6 +684,71 @@ class MppWriter:
             bit.setdefault(tid, i)
         return fm, bit
 
+    # ------------------------------------------------------------ view cache --
+    VIEW_PRJ = "   214"
+    EDL_ROWS, EDL_LAYOUT, EDL_PAINTED = 0x26400035, 0x2640003D, 0x26400024
+    EDL_VAR2DATA_SIZE = 0x10007        # 214/Props: CEdl is view class 7
+
+    def _refresh_gantt_rows(self, uids: List[int]) -> None:
+        """Rewrite the CEdl row cache for `uids`, the visible rows in ID order.
+
+        Each CEdl record is a Props blob (var type 6) for one sheet view. Three
+        entries describe its rows: 0x..35 the row uids followed by a fixed
+        trailer, 0x..3D the row count, n+1 pixel offsets (row height from the
+        trailer that follows them) and the pane state, 0x..24 the painted rows
+        padded with -1 to the slots the window had. See FORMAT_NOTES, "Files
+        open on the template's row count". Templates without the record are
+        left alone.
+        """
+        edl = f"{self.VIEW_PRJ}/CEdl"
+        try:
+            vm = self._get(f"{edl}/VarMeta")
+            vd = self._get(f"{edl}/Var2Data")
+        except KeyError:
+            return
+        _, _, entries = B.parse_var_meta(vm)
+        if not entries:
+            return
+        rows = b"".join(struct.pack("<I", u) for u in uids)
+        n = len(uids)
+        out_meta, out_data, changed = bytearray(vm[:24]), bytearray(), False
+        for uid, off, typ, unk in entries:
+            size = struct.unpack_from("<I", vd, off)[0]
+            blob = vd[off + 4:off + 4 + size]
+            if typ == 6 and len(blob) >= 16:
+                hdr, props, order = B.parse_props(blob)
+                if self.EDL_ROWS in props and self.EDL_LAYOUT in props:
+                    layout = props[self.EDL_LAYOUT]
+                    old_n = struct.unpack_from("<I", layout, 0)[0]
+                    row_h = struct.unpack_from("<H", layout, 4 + (old_n + 1) * 4)[0] or 42
+                    props[self.EDL_ROWS] = rows + props[self.EDL_ROWS][old_n * 4:]
+                    props[self.EDL_LAYOUT] = (struct.pack("<I", n)
+                                              + b"".join(struct.pack("<I", i * row_h) for i in range(n + 1))
+                                              + layout[4 + (old_n + 1) * 4:])
+                    if self.EDL_PAINTED in props:
+                        slots = max(len(props[self.EDL_PAINTED]) // 4, n)
+                        props[self.EDL_PAINTED] = rows + b"\xff" * 4 * (slots - n)
+                    blob = B.build_props(hdr, props, order)
+                    changed = True
+            out_meta += struct.pack("<IIHH", uid, len(out_data), typ, unk)
+            out_data += struct.pack("<I", len(blob)) + blob
+        if not changed:
+            return
+        struct.pack_into("<I", out_meta, 8, len(entries))
+        struct.pack_into("<I", out_meta, 20, len(out_data))
+        self._set(f"{edl}/VarMeta", bytes(out_meta))
+        self._set(f"{edl}/Var2Data", bytes(out_data))
+        # the view storage's Props gates each class's Var2Data read at the
+        # declared length, like the 114 storage's does
+        try:
+            vp = self._get(f"{self.VIEW_PRJ}/Props")
+        except KeyError:
+            return
+        hdr, props, order = B.parse_props(vp)
+        if self.EDL_VAR2DATA_SIZE in props:
+            props[self.EDL_VAR2DATA_SIZE] = struct.pack("<I", len(out_data))
+            self._set(f"{self.VIEW_PRJ}/Props", B.build_props(hdr, props, order))
+
     def _get(self, path: str) -> bytes:
         s = self.root
         parts = path.split("/")
@@ -1380,10 +1445,10 @@ class MppWriter:
             if asn.resource_uid not in rsc_by_uid:
                 raise ValueError(f"assignment references unknown resource uid {asn.resource_uid}")
         # Project keeps an assignment row for every leaf task, with a placeholder
-        # resource where nobody is assigned. Dropping those rows (they cannot be
-        # cloned from the template, whose copies override task durations) left
-        # Project opening the file on the template's row count until the view was
-        # rebuilt — every file this library wrote showed three rows on open.
+        # resource where nobody is assigned. They cannot be cloned from the
+        # template (its copies override task durations), so they are regenerated
+        # per task. (They were once thought to cure the three-rows-on-open glitch;
+        # that was the view's row cache, see _refresh_gantt_rows.)
         assigned = {a.task_uid for a in project.assignments}
         specs = [(a.task_uid, a.resource_uid, a.units, a.baselines)
                  for a in project.assignments]
@@ -1615,6 +1680,12 @@ class MppWriter:
                               vd.replace(self.template_start, new_start))
             except KeyError:
                 pass
+
+        # Gantt row cache (#74): the view storage's CEdl record remembers the rows
+        # the Gantt table last painted — task uids and a pixel offset per row — and
+        # Project paints exactly those on open until the view is rebuilt. Left as
+        # the template saved it, every file opened on the template's three rows.
+        self._refresh_gantt_rows([t.uid for t in project.tasks])
 
         # document metadata: SummaryInformation (title, subject, author, keywords,
         # comments) + DocumentSummaryInformation (manager, company, category)
