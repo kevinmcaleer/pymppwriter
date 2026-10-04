@@ -106,20 +106,27 @@ CONSTRAINT_TYPES = {"ASAP": 0, "ALAP": 1, "MSO": 2, "MFO": 3,
                     "SNET": 4, "SNLT": 5, "FNET": 6, "FNLT": 7}
 TASK_TYPES = {"fixed_units": 0, "fixed_duration": 1, "fixed_work": 2}
 CAL_NAME_VAR, CAL_DATA_VAR = 1, 8
-# How a progressed assignment is encoded (#56). The defaults write a finished
-# assignment the way Project does: its own actual start, finish and % work
-# complete, the actual-work contour (var 50) and an emptied remaining contour
-# (var 49) — variant C of scripts/progress_variants.py. Without them Project
-# reconciled a 100%-complete assigned task back to 99% with a zero duration.
+# How a progressed assignment is encoded (#56, #1221). Project rebuilds an
+# assigned task's duration from the assignment's timephased blobs, not from the
+# task's own fields: the actual-work contour (var 50) plus the remaining contour
+# (var 49), with var 87 (the working windows of the first day worked) alongside
+# var 50. A finished assignment written this way -- variant H of
+# scripts/progress_variants.py -- was the only one of A-L that opened in Project
+# at 100% with its full duration. Without var 50 Project only sees the remaining
+# span, which is why a 50% task opened at 100% / half its duration, and an
+# unassigned 100% task (whose placeholder row had neither blob) at 0 days.
 ASSN_PROGRESS_DEFAULTS = {
     "assn_actuals": True,         # ACTUAL_START / ACTUAL_FINISH / PERCENT_WORK_COMPLETE on the assignment
-    "actual_contour": True,       # var 50 at 100%
-    "remaining_at_100": "zero",   # var 49 at 100%: "zero" (count 1), "count0", or "full" (pre-0.4.1)
+    "actual_contour": "any",      # var 50: "any" progress, "done" (100% only) or False
+    "remaining_at_100": "project",  # var 49 at 100%: "project" (Project's own), "zero" (count 1), "count0" or "full" (pre-0.4.1)
+    "remaining_block": False,     # var 49 at 1-99%: also fill the trailing block (Project's 0% shape)
+    "irregular_actual": "first_day",  # var 87 with var 50: "first_day" (Project's), "actual_days", "all_days" or None
+    "irregular_partial": True,    # var 87 at 1-99% too, not only at 100%
+    "task_marks": False,          # task fields 201 / 1250 / 1255 as Project leaves a finished assigned task
 }
-# placeholder rows (no resource) keep the 0.4.1 encoding: an unassigned
-# 100%-complete task already round-trips through Project
-ASSN_PROGRESS_PLACEHOLDER = {"assn_actuals": False, "actual_contour": False,
-                             "remaining_at_100": "zero"}
+# placeholder rows (no resource) get the same encoding: an unassigned 100% task
+# opened at 99% / 0 days under the 0.4.1 one
+ASSN_PROGRESS_PLACEHOLDER = dict(ASSN_PROGRESS_DEFAULTS)
 RSC_NATIVE = {"UNIQUE_ID": 27, "ID": 0, "NAME": 1, "INITIALS": 2, "EMAIL_ADDRESS": 35,
               "MAX_UNITS": 4, "CALENDAR_UID": 56, "GUID": 728, "CALENDAR_GUID": 729,
               "POSITION": 730}
@@ -129,7 +136,8 @@ ASSN_NATIVE = {"UNIQUE_ID": 0, "TASK_UNIQUE_ID": 1, "RESOURCE_UNIQUE_ID": 2, "ST
                "TASK_GUID": 637, "RESOURCE_GUID": 638, "CREATED": 634,
                "ACTUAL_START": 22, "ACTUAL_FINISH": 23, "PERCENT_WORK_COMPLETE": 43,
                "PLANNED_WORK_DATA": 49,      # timephased remaining regular work
-               "ACTUAL_WORK_DATA": 50}       # timephased actual regular work
+               "ACTUAL_WORK_DATA": 50,       # timephased actual regular work
+               "ACTUAL_IRREGULAR_DATA": 87}  # TIMEPHASED_ACTUAL_IRREGULAR_WORK: working windows
 REL_TYPES = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
 NULL_RESOURCE_UID = -65535     # assignment row for a task with nobody assigned
 NULL_RESOURCE_GUID = bytes.fromhex("788bcba08c2a6d4300000000000000ff")
@@ -143,8 +151,8 @@ WORK_WINDOWS = ((8 * 60, 12 * 60), (13 * 60, 17 * 60))   # Standard calendar, mi
 
 
 def actual_work_contour(units: float, work: float, dur_tenths: int) -> bytes:
-    """Var entry 50 (RAW_TIMEPHASED_ACTUAL_REGULAR_WORK) for an assignment whose
-    work is all done, in the single-segment shape Project wrote in DR&R.mpp:
+    """Var entry 50 (RAW_TIMEPHASED_ACTUAL_REGULAR_WORK): the work done so far
+    over the elapsed duration, in the single-segment shape Project wrote in DR&R.mpp:
     header <count=1><24><36>, then units x 10000, actual work (milli-minutes) and
     actual duration (tenths x 8), with one block at +32 read the way MPXJ reads
     it — start offset 0, cumulative work, units, end offset."""
@@ -156,6 +164,45 @@ def actual_work_contour(units: float, work: float, dur_tenths: int) -> bytes:
         struct.pack_into("<d", blob, off, work)
     for off in (24, 52):
         struct.pack_into("<I", blob, off, dur_tenths * 8)
+    return bytes(blob)
+
+
+def project_remaining_at_100(units: float, work: float, dur_tenths: int) -> bytes:
+    """Var entry 49 as Project saves it once an assignment is 100% complete: the
+    count words and the leading block (+8..+31) emptied, the trailing block at
+    +44 still holding the full work, units x 16 and duration x 8 (before/after
+    pair saved by Project, #1221)."""
+    blob = bytearray(72)
+    struct.pack_into("<HHI", blob, 0, 0, 32, 44)
+    struct.pack_into("<d", blob, 44, work)
+    struct.pack_into("<d", blob, 52, units * PCT_SCALE * 16)
+    struct.pack_into("<I", blob, 68, dur_tenths * 8)
+    return bytes(blob)
+
+
+def irregular_actual_windows(windows, nonworking, start: datetime, finish: datetime, mode: str) -> bytes:
+    """Var entry 87 (TIMEPHASED_ACTUAL_IRREGULAR_WORK): <count><2*count><16>, 8 zero
+    bytes, then each working window's start and finish as 4-byte timestamps.
+    Project wrote only the first day's two windows for a finished two-day task
+    ("first_day"); "actual_days" lists every working day from start to finish
+    (the span actually worked, when the caller passes the stop point as finish)."""
+    wins, day = [], start.date()
+    while day <= finish.date():
+        if day not in nonworking:
+            for w0, w1 in windows.get(day.weekday(), ()):
+                w_start = datetime.combine(day, datetime.min.time()) + timedelta(minutes=w0)
+                w_end = datetime.combine(day, datetime.min.time()) + timedelta(minutes=w1)
+                if w_end <= start or w_start >= finish:
+                    continue
+                wins.append((max(w_start, start), min(w_end, finish)))
+            if wins and mode == "first_day":
+                break
+        day += timedelta(days=1)
+    # the third header word is where the records start (16), not their length:
+    # 8 * count only coincided with it in the two-window sample
+    blob = bytearray(struct.pack("<HHI", len(wins), 2 * len(wins), 16) + bytes(8))
+    for a, b in wins:
+        blob += B.encode_timestamp(a) + B.encode_timestamp(b)
     return bytes(blob)
 
 
@@ -608,6 +655,7 @@ class MppWriter:
         # the shipped encoding, and scripts/progress_variants.py overrides them
         # to build the files a Microsoft Project resave has to judge
         self._assn_progress = dict(ASSN_PROGRESS_DEFAULTS)
+        self._placeholder_progress = dict(ASSN_PROGRESS_PLACEHOLDER)
         self.now = now or (lambda: datetime.now().replace(second=0, microsecond=0))
         self.root = load_cfb(template_path)
         self.prj = self.root.storage_path(PRJ)
@@ -862,17 +910,6 @@ class MppWriter:
                               f"no working time with the resource calendars; Project will schedule "
                               f"it ignoring the resource calendar", ScheduleWarning, stacklevel=2)
 
-        # Project reconciles a finished task against its assignments' actuals and
-        # timephased actual work (var id 50). Both are written now, in Project's
-        # own shape, but no Project resave has confirmed the task keeps 100%
-        for uid in {a.task_uid for a in project.assignments}:
-            if by_uid[uid].percent_complete == 100:
-                warnings.warn(f"task {uid} {by_uid[uid].name!r} is 100% complete and has "
-                              f"assignments; Project recalculates progress from the assignments' "
-                              f"actual work, and this encoding is not yet confirmed to keep it "
-                              f"at 100% (older versions showed 99%)",
-                              ScheduleWarning, stacklevel=2)
-
         # a start on a window boundary (12:00, or the end of a half day) is not
         # a working moment: Project rolls it forward on the next recalculation
         for t in project.tasks:
@@ -1091,6 +1128,19 @@ class MppWriter:
                 self._put_ts(rec, "RESUME", point)
                 for f in ("PERCENT_COMPLETE", "ACTUAL_START", "ACTUAL_DURATION"):
                     self._put_bit(m, m2, f, True)
+                if (pct == 100 and task is not None and self._assn_progress["task_marks"]
+                        and (self._placeholder_progress["task_marks"]
+                             or any(a.task_uid == task.uid for a in project.assignments))):
+                    # what Project leaves on a finished assigned task (#1221): a
+                    # progress bit in flag word 201, outline-code recalc 1, and the
+                    # prior-progress mark cleared
+                    it = self.task_fm.get(201)
+                    if it is not None and it.block == 0:
+                        rec[it.offset + 1] |= 0x90
+                    it = self.task_fm.get(1250)
+                    if it is not None and it.block == 1:
+                        struct.pack_into("<i", rec2, it.offset, 1)
+                    self._putf_ts(self.task_fm, NATIVE, rec, rec2, "SUMMARY_PROGRESS_PRIOR", None)
             extra_vars = []
             if task is not None:
                 if task.notes:
@@ -1379,9 +1429,9 @@ class MppWriter:
                 remaining_dur_tenths = dur_tenths - elapsed_dur_tenths
                 reached = (finish if tpct == 100 else
                            advance_working(start, elapsed_dur_tenths, pattern))
-            # placeholder rows keep the 0.4.1 encoding, so an unassigned task
-            # stays the control in scripts/progress_variants.py
-            opts = ASSN_PROGRESS_PLACEHOLDER if empty else self._assn_progress
+            # placeholder rows have their own switch set so scripts/progress_variants.py
+            # can vary the two independently; they ship with the same encoding
+            opts = self._placeholder_progress if empty else self._assn_progress
             if opts["assn_actuals"] and tpct:
                 put("PERCENT_WORK_COMPLETE", "<H", tpct)
                 self._putf_ts(self.assn_fm, ASSN_NATIVE, rec, rec2, "ACTUAL_START", start)
@@ -1402,7 +1452,10 @@ class MppWriter:
             afixed.append(bytes(rec)); afixed2.append(bytes(rec2))
             ameta.append(m); ameta2.append(m2)
             nvars = 0
-            contour = tpct == 100 and opts["actual_contour"]
+            contour = bool(tpct) and (opts["actual_contour"] == "any"
+                                      or (opts["actual_contour"] and tpct == 100))
+            actual_work = work * tpct / 100.0
+            elapsed_tenths = dur_tenths - remaining_dur_tenths
             for typ, payload in self.assn_proto["var"]:
                 if typ == ASSN_NATIVE["CREATED"]:
                     payload = B.encode_timestamp(self.now())
@@ -1432,17 +1485,34 @@ class MppWriter:
                     struct.pack_into("<d", b2, 8, asn.units * PCT_SCALE * 16)
                     struct.pack_into("<d", b2, 16, remaining_work)
                     struct.pack_into("<I", b2, 24, remaining_dur_tenths * 8)
+                    if 0 < tpct < 100 and opts["remaining_block"] and len(b2) >= 72:
+                        # the trailing block Project fills at 0%: work, units x 16, 0, duration x 8
+                        struct.pack_into("<d", b2, 44, remaining_work)
+                        struct.pack_into("<d", b2, 52, asn.units * PCT_SCALE * 16)
+                        struct.pack_into("<I", b2, 60, 0)
+                        struct.pack_into("<I", b2, 68, remaining_dur_tenths * 8)
                     if tpct == 100 and opts["remaining_at_100"] == "count0":
                         struct.pack_into("<H", b2, 0, 0)
                     payload = bytes(b2)
+                    if tpct == 100 and opts["remaining_at_100"] == "project":
+                        payload = project_remaining_at_100(asn.units, work, dur_tenths)
                 elif typ == ASSN_NATIVE["ACTUAL_WORK_DATA"] and contour:
                     continue                         # replaced below
                 avar_entries.append((i, typ, payload))
                 nvars += 1
             if contour:
                 avar_entries.append((i, ASSN_NATIVE["ACTUAL_WORK_DATA"],
-                                     actual_work_contour(asn.units, work, dur_tenths)))
+                                     actual_work_contour(asn.units, actual_work, elapsed_tenths)))
                 self._bitf(self.assn_bit, ASSN_NATIVE, m, m2, "ACTUAL_WORK_DATA", True)
+                nvars += 1
+            if contour and opts["irregular_actual"] and (tpct == 100 or opts["irregular_partial"]):
+                mode = opts["irregular_actual"]
+                avar_entries.append((i, ASSN_NATIVE["ACTUAL_IRREGULAR_DATA"],
+                                     irregular_actual_windows(
+                                         *(pattern if pattern else ({wd: WORK_WINDOWS for wd in range(5)}, frozenset())),
+                                         start, finish if mode == "all_days" else reached,
+                                         "first_day" if mode == "first_day" else "all")))
+                self._bitf(self.assn_bit, ASSN_NATIVE, m, m2, "ACTUAL_IRREGULAR_DATA", True)
                 nvars += 1
             for typ in ASSN_VAR_EMPTY:               # 16 zero bytes, as Project writes them
                 if typ == 667 and not empty:

@@ -421,12 +421,59 @@ encoding, because an unassigned 100% task already round-trips. The pick has **no
 by a Project resave, so the `ScheduleWarning` stays. If C still shows 99%, `progress_variants.py
 build` still writes A (0.4.1) and B, D, E and F for comparison.
 
+**Checked in Project (M365, #1221): variant C still showed 99% / 0 days.** A before/after pair
+Project saved itself (one 2-day task, one resource, 0% then 100%) showed three things we never
+wrote, and a matrix of six files (G-L, `progress_variants.py build`) isolated them:
+
+* **var 49 at 100%** is not "emptied, count 1": Project zeroes the header words and the leading
+  block (+8..+31) and leaves the trailing block at +44 holding the full work, units x 16 and
+  duration x 8 (`project_remaining_at_100`).
+* **var 87 (`TIMEPHASED_ACTUAL_IRREGULAR_WORK`) is written alongside var 50**: a 16-byte header
+  `<count><2 x count><16>` + 8 zero bytes, then `count` records of two 4-byte timestamps. Project
+  wrote the two working windows of the *first* day only (08:00-12:00, 13:00-17:00) for the 2-day
+  task. **This entry is what makes the difference**: with var 49/50 in Project's shapes but no
+  var 87 (G) the task opened at 0 days; with var 87 listing the first day (H) it opened at 100%,
+  2 days, correct finish; the same for finished tasks of 1, 3 (over a weekend) and 5 days. A
+  var 87 listing every day (I) opened at 0 days, but that file's header carried `8 x count` in the
+  third word, which only equals the record offset for two records, so the rule "first day only"
+  is confirmed to work and "every day" is untested with a correct header.
+* **Task fields 201 (a flag bit), 1250 (set to 1) and 1255 (cleared)** also change, but H works
+  without them, so they are not written (`task_marks` keeps them available).
+
+The same screenshots showed the two remaining failures, and MPXJ's reading of the blobs
+(`TimephasedDataFactory`: the leading double at +16 of var 49 is the remaining work, the
+20/28-byte records after +36 / +44 are the actual and remaining segments) explains both:
+**Project rebuilds an assigned task's duration from the assignment's timephased blobs** -- the
+actual segment in var 50 followed by the remaining segment in var 49 -- and then its percent
+complete from the task's own actual duration against that rebuilt duration.
+
+* A **50%-complete assigned task** opened at 100% with half its duration: var 50 was only written
+  at 100%, so Project saw one day of remaining work and nothing done, rebuilt the assignment as
+  one day from the start, and the task's one day of actual duration made that 100%.
+* An **unassigned 100% task** opened at 99% / 0 days: its placeholder row kept the 0.4.1 encoding,
+  an emptied var 49 and no var 50 at all, which is a zero-length assignment.
+
+**Shipped now: every assignment row with progress, placeholder or not, carries var 50
+with the work done so far over the elapsed duration, var 49 with the remainder, and var 87 with
+the first worked day's windows**; at 100% var 49 takes Project's shape above. **All of it is
+confirmed in Project** (round 5, `progress_variants.py round5`): R1, this encoding, opened every
+task of a six-task file (unassigned 2-day 100%, unassigned 4-day 50%, assigned 2-day 50%, 4-day
+50%, 4-day 25%, assigned 2-day 100%) at its written duration, dates and percentage. The other
+three files say what each piece does: without var 87 on the partial rows (R2) the 50% tasks
+opened at half their duration and the 25% one at 3 days / 17%; with var 87 listing *every* day
+worked, header corrected (R3), the 100% tasks opened at 0 days and the 4-day 50% ones at 2 days,
+so "the first day's windows only" is Project's rule, not an artefact of the earlier header bug;
+filling var 49's trailing block as well (R4) changed nothing. The earlier P1-P3 files showed the
+same for placeholder rows: var 49 + var 50 without var 87 (P1) opened at 0 days, with it (P2) at
+the right duration, and the task-field changes (P3) made no difference. The `ScheduleWarning` on
+a 100%-complete assigned task is gone.
+
 The TypeScript port (`js/src/writer.ts`) received the same change; `js/test/writer.parity.test.ts`
 compares its output against the Python writer byte for byte on a project that includes a 50%-complete
 assigned task, and the two remain identical after the fix.
 
 ## Not yet handled
 Resource rates and costs, material and cost resource types, per-resource working weeks (resource
-calendars are written as copies of Standard), timephased *actual* work (var id 50 — remaining work
-is written, see "Progress on assigned tasks" above), baselines, other timephased data, and
-subprojects.
+calendars are written as copies of Standard), timephased work beyond the single actual and
+remaining segments progress needs (see "Progress on assigned tasks" above), baselines, other
+timephased data, and subprojects.

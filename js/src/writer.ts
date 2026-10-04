@@ -58,8 +58,8 @@ const i32 = (v: number) => { const b = new Uint8Array(4); dv(b).setInt32(0, v, t
 const f64 = (v: number) => { const b = new Uint8Array(8); dv(b).setFloat64(0, v, true); return b; };
 
 /**
- * Var entry 50 (RAW_TIMEPHASED_ACTUAL_REGULAR_WORK) for an assignment whose work
- * is all done, in the single-segment shape Project writes: header
+ * Var entry 50 (RAW_TIMEPHASED_ACTUAL_REGULAR_WORK): the work done so far over
+ * the elapsed duration, in the single-segment shape Project writes: header
  * <count=1><24><36>, then units x 10000, actual work (milli-minutes) and actual
  * duration (tenths x 8), with one block at +32 starting at the assignment's start.
  */
@@ -73,6 +73,59 @@ export function actualWorkContour(units: number, work: number, tenths: number): 
   for (const off of [16, 36]) d.setFloat64(off, work, true);
   for (const off of [24, 52]) d.setUint32(off, (tenths * 8) >>> 0, true);
   return blob;
+}
+
+/**
+ * Var entry 49 as Project saves it once an assignment is 100% complete: the
+ * count words and the leading block (+8..+31) emptied, the trailing block at +44
+ * still holding the full work, units x 16 and duration x 8 (#1221).
+ */
+export function projectRemainingAt100(units: number, work: number, tenths: number): Uint8Array {
+  const blob = new Uint8Array(72);
+  const d = dv(blob);
+  d.setUint16(0, 0, true);
+  d.setUint16(2, 32, true);
+  d.setUint32(4, 44, true);
+  d.setFloat64(44, work, true);
+  d.setFloat64(52, units * PCT_SCALE * 16, true);
+  d.setUint32(68, (tenths * 8) >>> 0, true);
+  return blob;
+}
+
+/**
+ * Var entry 87 (TIMEPHASED_ACTUAL_IRREGULAR_WORK): <count><2*count><16>, 8 zero
+ * bytes, then each working window's start and finish as 4-byte timestamps.
+ * Project wrote only the first day's two windows for a finished two-day task,
+ * and that is the shape that keeps a finished assigned task at 100% with its
+ * full duration (#1221); mode "all" lists every window up to `finish`.
+ */
+export function irregularActualWindows(
+  pattern: WorkPattern, start: Date, finish: Date, mode: "first_day" | "all",
+): Uint8Array {
+  const wins: Array<[Date, Date]> = [];
+  let day = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+  const lastDay = Date.UTC(finish.getUTCFullYear(), finish.getUTCMonth(), finish.getUTCDate());
+  while (day.getTime() <= lastDay) {
+    if (!pattern.nonworking.has(day.toISOString().slice(0, 10))) {
+      for (const [w0, w1] of pattern.windows.get((day.getUTCDay() + 6) % 7) ?? []) {
+        const wStart = new Date(day.getTime() + w0 * 60_000);
+        const wEnd = new Date(day.getTime() + w1 * 60_000);
+        if (wEnd.getTime() <= start.getTime() || wStart.getTime() >= finish.getTime()) continue;
+        wins.push([
+          wStart.getTime() > start.getTime() ? wStart : start,
+          wEnd.getTime() < finish.getTime() ? wEnd : finish,
+        ]);
+      }
+      if (wins.length && mode === "first_day") break;
+    }
+    day = new Date(day.getTime() + 86_400_000);
+  }
+  const head = new Uint8Array(16);
+  const d = dv(head);
+  d.setUint16(0, wins.length, true);
+  d.setUint16(2, 2 * wins.length, true);
+  d.setUint32(4, 16, true);
+  return concat([head, ...wins.flatMap(([a, b]) => [B.encodeTimestamp(a), B.encodeTimestamp(b)])]);
 }
 
 function concat(parts: Uint8Array[]): Uint8Array {
@@ -601,19 +654,6 @@ export class MppWriter {
         );
       }
     }
-    // Project reconciles a finished task against its assignments' actuals and
-    // timephased actual work. Both are written now, in Project's own shape, but
-    // no Project resave has confirmed the task keeps 100%
-    for (const uid of new Set(assignments.map((a) => a.taskUid))) {
-      if ((byUid.get(uid)?.percentComplete ?? 0) === 100) {
-        warn(
-          `task ${uid} ${JSON.stringify(byUid.get(uid)!.name)} is 100% complete and has assignments; ` +
-            `Project recalculates progress from the assignments' actual work, and this encoding is ` +
-            `not yet confirmed to keep it at 100% (older versions showed 99%)`,
-        );
-      }
-    }
-
     const pStart = new Date(Math.min(...tasks.map((t) => eff.get(t.uid)!.start.getTime()), project.start.getTime()));
     const pFinish = new Date(Math.max(...tasks.map((t) => eff.get(t.uid)!.finish.getTime()), project.start.getTime()));
     const summaryGuid = this.newGuid();
@@ -1157,11 +1197,10 @@ export class MppWriter {
         remainingTenths = e.tenths - elapsedTenths;
         reached = tpct === 100 ? e.finish : advanceWorking(e.start, elapsedTenths, pattern);
       }
-      // a real assignment carries its own actuals, as Project writes them: without
-      // them Project read a finished assignment as not started and showed the
-      // task at 99% (#56). Placeholder rows keep the 0.4.1 encoding, which an
-      // unassigned task already round-trips with
-      if (!empty && tpct) {
+      // a progressed assignment carries its own actuals, as Project writes them:
+      // without them Project read a finished assignment as not started and
+      // showed the task at 99% (#56). Placeholder rows get them too (#1221)
+      if (tpct) {
         put("PERCENT_WORK_COMPLETE", "u16", tpct);
         this.putfTs(this.assnFm, ASSN_NATIVE, rec, rec2, "ACTUAL_START", e.start);
         this.bitf(this.assnBit, ASSN_NATIVE, m, m2, "ACTUAL_START", true);
@@ -1187,7 +1226,14 @@ export class MppWriter {
       ameta.push(m);
       ameta2.push(m2);
       let nvars = 0;
-      const contour = !empty && tpct === 100;
+      // Project rebuilds an assigned task's duration from the assignment's
+      // timephased blobs: the actual-work contour (var 50) plus the remaining
+      // contour (var 49), with var 87 alongside var 50. Without var 50 a 50%
+      // task opened at 100% with half its duration, and an unassigned 100% task
+      // (whose placeholder row had neither blob) at 0 days (#1221)
+      const contour = tpct > 0;
+      const actualWork = (work * tpct) / 100;
+      const elapsedTenths = e.tenths - remainingTenths;
       for (const [typ, payload0] of this.assnProto!.var) {
         let payload = payload0;
         if (typ === ASSN_NATIVE["CREATED"]) {
@@ -1204,7 +1250,7 @@ export class MppWriter {
           bd.setFloat64(8, units * PCT_SCALE * 16, true);
           bd.setFloat64(16, remainingWork, true);
           bd.setUint32(24, remainingTenths * 8, true);
-          payload = b2;
+          payload = tpct === 100 ? projectRemainingAt100(units, work, e.tenths) : b2;
         } else if (typ === ASSN_NATIVE["ACTUAL_WORK_DATA"] && contour) {
           continue; // replaced below
         }
@@ -1214,9 +1260,15 @@ export class MppWriter {
       if (contour) {
         avarEntries.push({
           uid: i, type: ASSN_NATIVE["ACTUAL_WORK_DATA"]!,
-          payload: actualWorkContour(units, work, e.tenths),
+          payload: actualWorkContour(units, actualWork, elapsedTenths),
         });
         this.bitf(this.assnBit, ASSN_NATIVE, m, m2, "ACTUAL_WORK_DATA", true);
+        nvars += 1;
+        avarEntries.push({
+          uid: i, type: ASSN_NATIVE["ACTUAL_IRREGULAR_DATA"]!,
+          payload: irregularActualWindows(pattern, e.start, reached, "first_day"),
+        });
+        this.bitf(this.assnBit, ASSN_NATIVE, m, m2, "ACTUAL_IRREGULAR_DATA", true);
         nvars += 1;
       }
       for (const typ of ASSN_VAR_EMPTY) {
