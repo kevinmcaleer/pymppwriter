@@ -68,6 +68,19 @@ resource 37 / 50, assignment 34 / 53, relation 10 / **9**, calendar 10 / 9. M365
 (the 9-byte relation meta2 item is offset dword + one trailing byte, 0x07 observed).
 `FixedData` is the concatenation of records; record size = next offset − this offset.
 
+**Stale and deleted entries in a long-edited file.** The meta stream can be longer than the table:
+the `itemCount` header dword and Props key 16777217 (tasks; 16777218 resources, 16777220
+assignments, 16777221 relations) both give the number of live items, and Project ignores the rest.
+The extra items at the end are an earlier generation of the table — they repeat records already listed
+(same offset, same UID, different meta bits) and their offsets run *backwards*, so "next item's offset"
+is no longer a record's end; use the next larger offset (`split_fixed_data(..., by_offset=True)`).
+Inside the live range, an item whose flags dword has any of its **low 16 bits set** (0x2, 0x4, 0x6
+observed; live items have byte 2 only) is a deleted row: it keeps its old data — empty name, parent 0
+or a stale parent, an ID that a live row also has — and a deleted task's assignment rows carry
+resource UID −65535. Records are listed in creation order, not row order; the task `ID` field is the
+row number, and outline levels/parents only make sense in that order. Seen in two Project-saved files
+of 83 and 2,377 task entries (10 and 11 repeated UIDs); both read as consistent outlines once the rules above are applied.
+
 **Meta item bitmap** (the bytes after the offset dword): one bit per TASK_FIELD_MAP *entry*,
 little-endian bit order, indexed by the entry's position in the field map. The task FixedMeta item
 carries entries 0..311 ((47−8)×8), Fixed2Meta continues at 312. Boolean fields (category 0x0B/0x64 —
