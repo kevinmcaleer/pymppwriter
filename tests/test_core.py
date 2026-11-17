@@ -1143,3 +1143,78 @@ def test_project_shaped_remaining_and_irregular_blobs():
                                     D(2026, 10, 5, 8), D(2026, 10, 5, 10), "all")
     assert half[:2].hex() == "0100" and half[16:] == (B.encode_timestamp(D(2026, 10, 5, 8))
                                                       + B.encode_timestamp(D(2026, 10, 5, 10)))
+
+
+# --- stale and deleted records in the fixed streams (edited files) -----------------------
+
+def _fixed_klass(items, data, count=None):
+    """A _Klass over synthetic FixedMeta/FixedData; items are (flags, offset)."""
+    from pymppwriter.reader import _Klass
+    metas = [struct.pack("<II", flags, off) + bytes(39) for flags, off in items]
+    streams = {"S/FixedMeta": B.build_fixed_meta(struct.pack("<IIII", B.MAGIC, 4, 0, 0), metas, len(data)),
+               "S/FixedData": data}
+    props = {} if count is None else {1: struct.pack("<I", count)}
+
+    class FakeReader:
+        def __init__(self):
+            self.props = props
+        def _class_map(self, key):
+            return {}, {}
+        def _get(self, path):
+            return streams[path]
+    return _Klass(FakeReader(), "S", 47, 50, 0, 1 if count is not None else None)
+
+
+def test_declared_count_trusts_props_only_when_usable():
+    from pymppwriter.reader import declared_count
+    five = struct.pack("<I", 5)
+    assert declared_count({7: five}, 7, 9) == 5
+    assert declared_count({7: five}, 7, 4) == 4        # more than the stream holds: ignore
+    assert declared_count({7: struct.pack("<I", 0)}, 7, 9) == 9
+    assert declared_count({}, 7, 9) == 9 and declared_count({7: five}, None, 9) == 9
+
+
+def test_live_rows_skip_entries_past_the_declared_count_and_deleted_ones():
+    # items 0-2 are the live table (item 1 deleted); items 3-4 are an older generation
+    # that points back at records already listed, as in a file edited over a long time
+    k = _fixed_klass([(0x160000, 0), (0x160002, 10), (0x160000, 20), (0x90000, 0), (0x90000, 20)],
+                     bytes(range(30)), count=3)
+    assert list(k.live_rows()) == [0, 2]
+    assert k.count == 3
+
+
+def test_live_rows_without_a_declared_count_use_every_entry():
+    k = _fixed_klass([(0, 0), (0, 10), (4, 20)], bytes(30))
+    assert list(k.live_rows()) == [0, 1]               # the deleted one is still skipped
+
+
+def test_the_last_live_record_survives_a_stale_tail_that_points_backwards():
+    # Sizing a record by the next *item's* offset gave the last live record
+    # (offset 20) a negative slice, so it read as an empty stub and its children
+    # lost their parent. It must run to the next larger offset instead.
+    data = bytes(range(30))
+    k = _fixed_klass([(0, 0), (0, 10), (0, 20), (0, 0), (0, 10)], data, count=3)
+    assert k.recs[2] == data[20:30]
+    assert B.split_fixed_data(data, [struct.pack("<II", 0, o) + bytes(39) for o in (0, 10, 20, 0)]
+                              )[2] == b""              # the default sizing, unchanged for the writer
+
+
+def test_outline_order_sorts_by_row_id_and_keeps_stream_order_for_ties():
+    from pymppwriter.reader import outline_order
+    rows = [(3, 0, "c"), (1, 1, "a"), (None, 2, "tail"), (2, 3, "b"), (2, 4, "b2")]
+    assert outline_order(rows) == ["a", "b", "b2", "c", "tail"]
+
+
+@pytest.mark.skipif(not os.environ.get("PYMPP_STALE_REFERENCE"),
+                    reason="set PYMPP_STALE_REFERENCE to a long-edited Project-written file")
+def test_a_long_edited_project_file_reads_as_a_consistent_outline():
+    """Reads the real thing: PYMPP_STALE_REFERENCE=~/Downloads/long-edited.mpp"""
+    from pymppwriter import read_project
+    tasks = read_project(os.environ["PYMPP_STALE_REFERENCE"]).tasks
+    assert len({t.uid for t in tasks}) == len(tasks), "a task was returned twice"
+    stack = []
+    for t in tasks:                                    # parents must follow from outline levels
+        assert t.outline_level <= len(stack) + 1, f"{t.name!r} jumps a level"
+        del stack[t.outline_level - 1:]
+        assert t.parent_uid == (stack[-1] if stack else 0), f"{t.name!r} has a stale parent"
+        stack.append(t.uid)
