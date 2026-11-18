@@ -351,8 +351,13 @@ export function workingTenths(start: Date, finish: Date, pattern?: WorkPattern):
   return total;
 }
 
-/** The instant reached after `tenths` of working time from `start`. */
+/**
+ * The instant reached after `tenths` of working time from `start`. Negative
+ * `tenths` (a lead) step back through working time instead: the walk below only
+ * moves forward and would otherwise land before the first window.
+ */
 export function advanceWorking(start: Date, tenths: number, pattern?: WorkPattern): Date {
+  if (tenths < 0) return retreatWorking(start, -tenths, pattern);
   const { windows, nonworking } = pattern ?? DEFAULT_PATTERN();
   let minutes = Math.floor(tenths / 10);
   let day = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
@@ -372,6 +377,37 @@ export function advanceWorking(start: Date, tenths: number, pattern?: WorkPatter
     day = new Date(day.getTime() + DAY_MS);
   }
   return start;
+}
+
+/**
+ * The instant reached `tenths` of working time *before* `point`: the mirror of
+ * `advanceWorking`. When the walk back uses up a window exactly it stops at that
+ * window's start (13:00, not the 12:00 that ends the one before), which is a
+ * working moment; a `point` outside working time counts from the nearest
+ * working time before it.
+ */
+export function retreatWorking(point: Date, tenths: number, pattern?: WorkPattern): Date {
+  const { windows, nonworking } = pattern ?? DEFAULT_PATTERN();
+  let minutes = Math.floor(tenths / 10);
+  if (minutes <= 0) return point;
+  let day = new Date(Date.UTC(point.getUTCFullYear(), point.getUTCMonth(), point.getUTCDate()));
+  const minute = minutesOf(point);
+  const pointKey = dayKey(point);
+  for (let i = 0; i < 36600; i++) {
+    const key = dayKey(day);
+    if (!nonworking.has(key)) {
+      const today = [...(windows.get(weekdayOf(day)) ?? [])].sort((a, b) => b[0] - a[0]);
+      for (const [w0, w1] of today) {
+        const hi = key === pointKey ? Math.min(w1, minute) : w1;
+        if (hi > w0) {
+          if (minutes <= hi - w0) return atMinutes(day, hi - minutes);
+          minutes -= hi - w0;
+        }
+      }
+    }
+    day = new Date(day.getTime() - DAY_MS);
+  }
+  return point;
 }
 
 /**

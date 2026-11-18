@@ -276,7 +276,12 @@ def decode_rtf_notes(rtf: bytes) -> str:
 
 
 def advance_working(start: datetime, tenths: int, pattern=None) -> datetime:
-    """The datetime reached after `tenths` of working time from `start`."""
+    """The datetime reached after `tenths` of working time from `start`.
+
+    Negative `tenths` (a lead) step back through working time instead: the walk
+    below only moves forward and would otherwise land before the first window."""
+    if tenths < 0:
+        return retreat_working(start, -tenths, pattern)
     windows, nonworking = pattern if pattern else ({wd: WORK_WINDOWS for wd in range(5)}, frozenset())
     minutes = tenths // 10
     day, point = start.date(), start.hour * 60 + start.minute
@@ -291,6 +296,31 @@ def advance_working(start: datetime, tenths: int, pattern=None) -> datetime:
                     minutes -= w1 - lo
         day += timedelta(days=1)
     return start
+
+
+def retreat_working(point: datetime, tenths: int, pattern=None) -> datetime:
+    """The datetime reached `tenths` of working time *before* `point`.
+
+    The mirror of `advance_working`. When the walk back uses up a window exactly it
+    stops at that window's start (13:00, not the 12:00 that ends the one before),
+    which is a working moment; a `point` outside working time counts from the
+    nearest working time before it."""
+    windows, nonworking = pattern if pattern else ({wd: WORK_WINDOWS for wd in range(5)}, frozenset())
+    minutes = tenths // 10
+    if minutes <= 0:
+        return point
+    day, minute = point.date(), point.hour * 60 + point.minute
+    for _ in range(36600):
+        if day not in nonworking:
+            for w0, w1 in sorted(windows.get(day.weekday(), ()), reverse=True):
+                hi = min(w1, minute) if day == point.date() else w1
+                if hi > w0:
+                    if minutes <= hi - w0:
+                        m = hi - minutes
+                        return datetime(day.year, day.month, day.day, m // 60, m % 60)
+                    minutes -= hi - w0
+        day -= timedelta(days=1)
+    return point
 
 
 def previous_working_moment(point: datetime, pattern=None) -> Optional[datetime]:
