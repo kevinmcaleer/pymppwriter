@@ -39,19 +39,47 @@ class MppReadError(RuntimeError):
     """The file is not a project we can read."""
 
 
+DELETED_FLAGS = 0xFFFF      # low word of a FixedMeta item's flags dword; set = deleted record
+
+
+def declared_count(props: Dict[int, bytes], key: Optional[int], available: int) -> int:
+    """How many fixed-stream entries Props says are real, or `available` when
+    it says nothing usable (no key, zero, or more than the stream holds)."""
+    raw = props.get(key) if key is not None else None
+    if raw and len(raw) >= 4:
+        n = struct.unpack_from("<I", raw, 0)[0]
+        if 0 < n <= available:
+            return n
+    return available
+
+
+def outline_order(rows):
+    """Sort (row_id, stream_index, item) triples into outline order.
+
+    The fixed stream lists records in the order they were created or moved, not
+    in row order; the ID field is the row number, which is what outline levels
+    and parents are relative to. Ties (and a missing ID) keep stream order.
+    """
+    return [item for _, _, item in sorted(
+        rows, key=lambda r: (r[0] if r[0] is not None else 1 << 32, r[1]))]
+
+
 class _Klass:
     """One entity class (tasks, resources, …) with its records and field map."""
 
-    def __init__(self, reader, storage: str, meta_size: int, meta2_size: int, props_key: int):
+    def __init__(self, reader, storage: str, meta_size: int, meta2_size: int, props_key: int,
+                 count_key: Optional[int] = None):
         self.fm, self.bit = reader._class_map(props_key)
         self.recs, self.metas, self.recs2, self.metas2 = [], [], [], []
+        self.count = 0
         try:
             meta = reader._get(f"{storage}/FixedMeta")
             data = reader._get(f"{storage}/FixedData")
         except KeyError:
             return
         self.metas = B.parse_fixed_meta_auto(meta, meta_size)[2]
-        self.recs = B.split_fixed_data(data, self.metas)
+        self.recs = B.split_fixed_data(data, self.metas, by_offset=True)
+        self.count = declared_count(reader.props, count_key, len(self.recs))
         try:
             self.metas2 = B.parse_fixed_meta_auto(reader._get(f"{storage}/Fixed2Meta"), meta2_size)[2]
             self.recs2 = B.split_fixed_data(reader._get(f"{storage}/Fixed2Data"), self.metas2)
@@ -63,6 +91,24 @@ class _Klass:
             self.vdata = reader._get(f"{storage}/Var2Data")
         except KeyError:
             pass
+
+    def live_rows(self):
+        """Indices of the records Project itself would load.
+
+        Two kinds of leftover entries sit in the fixed streams of a file that
+        has been edited for a while, and neither is part of the plan:
+
+        * entries past the record count declared in Props — Project drops
+          those on load, and an earlier generation of the table is often
+          still there, listing records that are also listed earlier;
+        * entries whose meta flags carry a "deleted" bit (the low word of the
+          first dword; live records have it clear), which keep the old
+          contents, ID and parent of a row that was removed.
+        """
+        for i in range(min(self.count, len(self.metas))):
+            if struct.unpack_from("<I", self.metas[i], 0)[0] & DELETED_FLAGS:
+                continue
+            yield i
 
     def value(self, i: int, native_id: int, fmt: str):
         it = self.fm.get(native_id)
@@ -139,12 +185,16 @@ def read_project(path: str) -> Project:
     Raises MppReadError if the file is not an MPP14 project.
     """
     r = _Reader(path)
-    tasks_k = _Klass(r, f"{PRJ}/TBkndTask", TASK_META_SIZE, TASK_META2_SIZE, B.PROPS_TASK_FIELD_MAP)
-    rsc_k = _Klass(r, f"{PRJ}/TBkndRsc", RSC_META_SIZE, 53, B.PROPS_RESOURCE_FIELD_MAP)
-    assn_k = _Klass(r, f"{PRJ}/TBkndAssn", ASSN_META_SIZE, 53, B.PROPS_ASSIGNMENT_FIELD_MAP)
+    tasks_k = _Klass(r, f"{PRJ}/TBkndTask", TASK_META_SIZE, TASK_META2_SIZE,
+                     B.PROPS_TASK_FIELD_MAP, B.PROPS_TASK_RECORD_COUNT)
+    rsc_k = _Klass(r, f"{PRJ}/TBkndRsc", RSC_META_SIZE, 53,
+                   B.PROPS_RESOURCE_FIELD_MAP, B.PROPS_RESOURCE_RECORD_COUNT)
+    assn_k = _Klass(r, f"{PRJ}/TBkndAssn", ASSN_META_SIZE, 53,
+                    B.PROPS_ASSIGNMENT_FIELD_MAP, B.PROPS_ASSN_RECORD_COUNT)
 
-    tasks: List[Task] = []
-    for i, rec in enumerate(tasks_k.recs):
+    rows = []                          # (row ID, stream index, Task), put in outline order below
+    for i in tasks_k.live_rows():
+        rec = tasks_k.recs[i]
         if len(rec) <= 100:            # stub rows carry no fields
             continue
         uid = tasks_k.value(i, NATIVE["UNIQUE_ID"], "<I")
@@ -158,7 +208,7 @@ def read_project(path: str) -> Project:
         units_word = tasks_k.value(i, NATIVE["ACTUAL_DURATION_UNITS"], "<H") or 0
         constraint = _CONSTRAINT_NAMES.get(tasks_k.value(i, NATIVE["CONSTRAINT_TYPE"], "<H"))
         notes_raw = tasks_k.var(uid, NATIVE["NOTES"])
-        tasks.append(Task(
+        rows.append((tasks_k.value(i, NATIVE["ID"], "<I"), i, Task(
             uid=uid,
             name=tasks_k.text(uid, NATIVE["NAME"]),
             start=start,
@@ -176,10 +226,12 @@ def read_project(path: str) -> Project:
             percent_complete=tasks_k.value(i, NATIVE["PERCENT_COMPLETE"], "<H") or 0,
             priority=tasks_k.value(i, NATIVE["PRIORITY"], "<H") or 500,
             manual=tasks_k.flag(i, NATIVE["MANUALLY_SCHEDULED"]),
-        ))
+        )))
+    tasks: List[Task] = outline_order(rows)
 
     resources: List[Resource] = []
-    for i, rec in enumerate(rsc_k.recs):
+    for i in rsc_k.live_rows():
+        rec = rsc_k.recs[i]
         if len(rec) <= 100:
             continue
         uid = rsc_k.value(i, RSC_NATIVE["UNIQUE_ID"], "<I")
@@ -197,7 +249,7 @@ def read_project(path: str) -> Project:
         ))
 
     assignments: List[Assignment] = []
-    for i, rec in enumerate(assn_k.recs):
+    for i in assn_k.live_rows():
         task_uid = assn_k.value(i, ASSN_NATIVE["TASK_UNIQUE_ID"], "<I")
         rsc_uid = assn_k.value(i, ASSN_NATIVE["RESOURCE_UNIQUE_ID"], "<i")
         if not task_uid or rsc_uid is None or rsc_uid <= 0:
@@ -323,7 +375,7 @@ def _read_relations(r: _Reader) -> List[Relation]:
     except KeyError:
         return []
     out = []
-    for rec in recs:
+    for rec in recs[:declared_count(r.props, B.PROPS_REL_RECORD_COUNT, len(recs))]:
         if len(rec) < 20:
             continue
         _, pred, succ = struct.unpack_from("<III", rec, 0)

@@ -4,6 +4,7 @@ Layouts derived from the public behaviour of the LGPL MPXJ reader and from
 diffing files saved by Microsoft Project.
 """
 from __future__ import annotations
+import bisect
 import struct
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -139,14 +140,26 @@ def build_fixed_meta(header: bytes, items: List[bytes], data_len: Optional[int] 
     return bytes(hdr) + b"".join(items)
 
 
-def split_fixed_data(data: bytes, meta_items: List[bytes]) -> List[bytes]:
+def split_fixed_data(data: bytes, meta_items: List[bytes], by_offset: bool = False) -> List[bytes]:
+    """Cut FixedData into one record per meta item.
+
+    By default a record runs to the next item's offset, which assumes the items
+    are in offset order. A file that has been edited for a while breaks that —
+    stale items from an earlier table generation sit after the live ones and
+    point backwards — so `by_offset=True` ends each record at the next *larger*
+    offset instead (or the end of the data), whatever order the items are in.
+    """
+    offsets = [struct.unpack_from("<I", m, 4)[0] for m in meta_items]
+    if by_offset:
+        ends = sorted(set(offsets))
+        out = []
+        for off in offsets:
+            k = bisect.bisect_right(ends, off)
+            out.append(data[off:ends[k] if k < len(ends) else len(data)])
+        return out
     out = []
-    for i, m in enumerate(meta_items):
-        off = struct.unpack_from("<I", m, 4)[0]
-        if i + 1 < len(meta_items):
-            nxt = struct.unpack_from("<I", meta_items[i + 1], 4)[0]
-        else:
-            nxt = len(data)
+    for i, off in enumerate(offsets):
+        nxt = offsets[i + 1] if i + 1 < len(offsets) else len(data)
         out.append(data[off:nxt])
     return out
 
