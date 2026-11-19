@@ -525,6 +525,46 @@ def test_link_driven_start_rules():
     assert link_driven_start(Relation(1, 2, type="FF"), pred, 4800, pat) is None
 
 
+def test_a_lead_steps_back_through_working_time():
+    from datetime import date, datetime as D
+    from pymppwriter.writer import advance_working, retreat_working, Calendar, CalendarException, _work_pattern
+    # a working day back from the end of a day is that day's start; from mid-morning, the day before
+    assert advance_working(D(2026, 9, 8, 17), -4800) == D(2026, 9, 8, 8)
+    assert advance_working(D(2026, 9, 8, 10), -4800) == D(2026, 9, 7, 10)
+    assert advance_working(D(2026, 9, 7, 8), -4800) == D(2026, 9, 4, 8)         # back over the weekend
+    assert advance_working(D(2026, 9, 7, 13), -600) == D(2026, 9, 7, 11)        # an hour back skips lunch
+    # using a window up exactly stops at its start, which is a working moment
+    assert advance_working(D(2026, 9, 7, 17), -2400) == D(2026, 9, 7, 13)
+    assert advance_working(D(2026, 9, 8, 12), -2400) == D(2026, 9, 8, 8)
+    # nothing to step back, or less than a minute: the point itself
+    assert advance_working(D(2026, 9, 8, 17), -5) == D(2026, 9, 8, 17)
+    assert retreat_working(D(2026, 9, 8, 17), 0) == D(2026, 9, 8, 17)
+    # stepping forward again undoes a whole number of days
+    for point in (D(2026, 9, 8, 10), D(2026, 9, 9, 15), D(2026, 9, 14, 9)):
+        assert advance_working(advance_working(point, -14400), 14400) == point
+    # holidays and part-day weeks are respected
+    holiday = _work_pattern(Calendar(exceptions=[CalendarException(date(2026, 9, 7), name="Hol")]))
+    assert advance_working(D(2026, 9, 8, 8), -4800, holiday) == D(2026, 9, 4, 8)
+    half = _work_pattern(Calendar(week={2: [(480, 720)]}))                      # Wednesday mornings only
+    assert advance_working(D(2026, 9, 10, 8), -2400, half) == D(2026, 9, 9, 8)
+
+
+def test_link_driven_start_places_a_lead_before_the_predecessor_finishes():
+    from datetime import datetime as D
+    from pymppwriter.writer import link_driven_start, Relation, _work_pattern
+    pat = _work_pattern(None)
+    pred = (D(2026, 9, 7, 8), D(2026, 9, 8, 17), 9600)       # Mon 08:00 -> Tue 17:00
+    # these used to be placed after the predecessor (a day or less) or to raise ValueError (two days or more)
+    assert link_driven_start(Relation(1, 2, lag_days=-1.0), pred, 4800, pat) == D(2026, 9, 8, 8)
+    assert link_driven_start(Relation(1, 2, lag_days=-0.5), pred, 4800, pat) == D(2026, 9, 8, 13)
+    assert link_driven_start(Relation(1, 2, lag_days=-2.0), pred, 4800, pat) == D(2026, 9, 7, 8)
+    assert link_driven_start(Relation(1, 2, lag_days=-5.0), pred, 4800, pat) == D(2026, 9, 2, 8)
+    assert link_driven_start(Relation(1, 2, lag_days=-1.0), pred, 0, pat) == D(2026, 9, 8, 8)    # milestone
+    assert link_driven_start(Relation(1, 2, type="SS", lag_days=-1.0), pred, 4800, pat) == D(2026, 9, 4, 8)
+    # a positive lag is unchanged
+    assert link_driven_start(Relation(1, 2, lag_days=1.0), pred, 4800, pat) == D(2026, 9, 10, 8)
+
+
 @pytest.mark.skipif(not os.path.exists("templates/template.mpp"), reason="needs templates/template.mpp")
 def test_writer_pins_only_starts_the_links_do_not_produce(tmp_path):
     from datetime import datetime as D

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  workPattern, workingTenths, advanceWorking, nextWorkingMoment, previousWorkingMoment,
+  workPattern, workingTenths, advanceWorking, retreatWorking, nextWorkingMoment, previousWorkingMoment,
   weeklyOverlapMinutes, linkDrivenStart, encodeRtfNotes, decodeRtfNotes, validate,
   setBaseline, clearBaseline,
   type Project, type Calendar,
@@ -55,6 +55,42 @@ test("link-driven starts", () => {
   assert.equal(iso(linkDrivenStart({ predUid: 1, succUid: 2, type: "SS" }, pred, 4800)),
     iso(D(2026, 9, 7, 8)));
   assert.equal(linkDrivenStart({ predUid: 1, succUid: 2, type: "FF" }, pred, 4800), null);
+});
+
+test("a lead steps back through working time", () => {
+  // a working day back from the end of a day is that day's start; from mid-morning, the day before
+  assert.equal(iso(advanceWorking(D(2026, 9, 8, 17), -4800)), iso(D(2026, 9, 8, 8)));
+  assert.equal(iso(advanceWorking(D(2026, 9, 8, 10), -4800)), iso(D(2026, 9, 7, 10)));
+  assert.equal(iso(advanceWorking(D(2026, 9, 7, 8), -4800)), iso(D(2026, 9, 4, 8))); // back over the weekend
+  assert.equal(iso(advanceWorking(D(2026, 9, 7, 13), -600)), iso(D(2026, 9, 7, 11))); // an hour back skips lunch
+  // using a window up exactly stops at its start, which is a working moment
+  assert.equal(iso(advanceWorking(D(2026, 9, 7, 17), -2400)), iso(D(2026, 9, 7, 13)));
+  assert.equal(iso(advanceWorking(D(2026, 9, 8, 12), -2400)), iso(D(2026, 9, 8, 8)));
+  // nothing to step back, or less than a minute: the point itself
+  assert.equal(iso(advanceWorking(D(2026, 9, 8, 17), -5)), iso(D(2026, 9, 8, 17)));
+  assert.equal(iso(retreatWorking(D(2026, 9, 8, 17), 0)), iso(D(2026, 9, 8, 17)));
+  // stepping forward again undoes a whole number of days
+  for (const point of [D(2026, 9, 8, 10), D(2026, 9, 9, 15), D(2026, 9, 14, 9)]) {
+    assert.equal(iso(advanceWorking(advanceWorking(point, -14400), 14400)), iso(point));
+  }
+  // holidays and part-day weeks are respected
+  const holiday = workPattern({ exceptions: [{ start: D(2026, 9, 7), name: "Hol" }] });
+  assert.equal(iso(advanceWorking(D(2026, 9, 8, 8), -4800, holiday)), iso(D(2026, 9, 4, 8)));
+  const half = workPattern({ week: { 2: [[480, 720]] } }); // Wednesday mornings only
+  assert.equal(iso(advanceWorking(D(2026, 9, 10, 8), -2400, half)), iso(D(2026, 9, 9, 8)));
+});
+
+test("a lead places the successor before the predecessor finishes", () => {
+  const pred = { start: D(2026, 9, 7, 8), finish: D(2026, 9, 8, 17) };
+  const start = (lagDays: number, durTenths = 4800, type?: "SS") =>
+    iso(linkDrivenStart({ predUid: 1, succUid: 2, lagDays, ...(type ? { type } : {}) }, pred, durTenths));
+  assert.equal(start(-1), iso(D(2026, 9, 8, 8)));
+  assert.equal(start(-0.5), iso(D(2026, 9, 8, 13)));
+  assert.equal(start(-2), iso(D(2026, 9, 7, 8)));
+  assert.equal(start(-5), iso(D(2026, 9, 2, 8)));
+  assert.equal(start(-1, 0), iso(D(2026, 9, 8, 8))); // milestone
+  assert.equal(start(-1, 4800, "SS"), iso(D(2026, 9, 4, 8)));
+  assert.equal(start(1), iso(D(2026, 9, 10, 8))); // a positive lag is unchanged
 });
 
 test("a night calendar shares no working time with the standard one", () => {
